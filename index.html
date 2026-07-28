@@ -530,7 +530,9 @@ function navbar(){
         <div style="display:flex; gap:10px; align-items:center;">
           <div class="pill ${c==='customer'?'active':''}" data-action="switch-portal" data-portal="customer">👪 Parents</div>
           <div class="pill ${c==='teacher'?'active':''}" data-action="switch-portal" data-portal="teacher">🍎 Teachers</div>
-          ${loggedIn ? `<button class="btn btn-ghost btn-sm" data-action="logout">🚪 Log out</button>` : ''}
+          ${loggedIn
+            ? `<button class="btn btn-ghost btn-sm" data-action="logout">🚪 Log out</button>`
+            : `<button class="btn btn-primary btn-sm" data-action="go" data-view="${c==='customer'?'studentAuth':'teacherAuth'}" data-mode="login">Log in</button>`}
         </div>
       </div>
     </div>
@@ -1329,6 +1331,27 @@ async function confirmPay(method){
   studentDataStatus = 'idle';
   ensureStudentData(true);
 }
+
+document.addEventListener('keydown', (e)=>{
+  if(e.key !== 'Enter') return;
+  const id = e.target.id;
+  if(id==='suName' || id==='suEmail' || id==='suPassword'){
+    e.preventDefault();
+    if(state.studentAuthMode==='login'){
+      signInStudent(document.getElementById('suEmail').value, document.getElementById('suPassword').value);
+    }else{
+      signUpStudent(document.getElementById('suName').value, document.getElementById('suEmail').value, document.getElementById('suPassword').value);
+    }
+  }
+  if(id==='tuName' || id==='tuEmail' || id==='tuPassword'){
+    e.preventDefault();
+    if(state.teacherAuthMode==='login'){
+      signInTeacher(document.getElementById('tuEmail').value, document.getElementById('tuPassword').value);
+    }else{
+      signUpTeacher(document.getElementById('tuName').value, document.getElementById('tuEmail').value, document.getElementById('tuPassword').value);
+    }
+  }
+});
 
 boot();
 </script>
