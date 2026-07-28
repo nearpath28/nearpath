@@ -18,11 +18,12 @@ create table teacher_profiles (
   subjects text[] default '{}',
   location text default '',
   distance text default '',
+  maps_link text default '',
   fee_start int default 0,
   fee_unit text default '/month',
   experience text default '',
   bio text default '',
-  rating numeric default 5,
+  rating numeric default 0,
   reviews int default 0
 );
 
@@ -68,6 +69,19 @@ create table payments (
   paid_at timestamptz not null default now()
 );
 
+-- 7) reviews: a parent's star rating + comment for a teacher, tied to a
+-- specific enrollment (one review per enrollment). teacher_profiles.rating
+-- and .reviews are kept in sync automatically by the trigger below.
+create table reviews (
+  id bigserial primary key,
+  teacher_id uuid not null references teacher_profiles(profile_id) on delete cascade,
+  student_id uuid not null references profiles(id) on delete cascade,
+  enrollment_id bigint unique references enrollments(id) on delete set null,
+  rating int not null check (rating between 1 and 5),
+  comment text default '',
+  created_at timestamptz not null default now()
+);
+
 -- ---------------------------------------------------------------
 -- Row Level Security: lock every table down, then open specific,
 -- narrow policies. Without this, the anon key can read/write anything.
@@ -78,6 +92,7 @@ alter table schedule_slots enable row level security;
 alter table enquiries enable row level security;
 alter table enrollments enable row level security;
 alter table payments enable row level security;
+alter table reviews enable row level security;
 
 -- profiles: names are shown publicly (e.g. "with Ritu Sharma"), but only
 -- the owner can create/change their own row.
@@ -106,3 +121,40 @@ create policy "student or teacher can update an enrollment" on enrollments for u
 -- payments: only the paying student can see or create their own payment records.
 create policy "payments visible to the paying student" on payments for select using (auth.uid() = student_id);
 create policy "students can record their own payments" on payments for insert with check (auth.uid() = student_id);
+
+-- reviews: shown publicly on a teacher's profile, but only the reviewing
+-- student can create or edit their own review.
+create policy "reviews are publicly readable" on reviews for select using (true);
+create policy "students can leave a review" on reviews for insert with check (auth.uid() = student_id);
+create policy "students can edit their own review" on reviews for update using (auth.uid() = student_id);
+
+-- ---------------------------------------------------------------
+-- Keep teacher_profiles.rating / .reviews as a live average instead of a
+-- fixed default, so every teacher starts with no rating shown until real
+-- reviews come in, and the number updates the moment a review is added,
+-- changed, or removed.
+-- ---------------------------------------------------------------
+create or replace function update_teacher_rating() returns trigger as $$
+declare
+  affected_teacher uuid := coalesce(new.teacher_id, old.teacher_id);
+begin
+  update teacher_profiles
+  set rating = coalesce((select round(avg(rating)::numeric, 1) from reviews where teacher_id = affected_teacher), 0),
+      reviews = (select count(*) from reviews where teacher_id = affected_teacher)
+  where profile_id = affected_teacher;
+  return null;
+end;
+$$ language plpgsql security definer;
+
+create trigger reviews_after_change
+after insert or update or delete on reviews
+for each row execute function update_teacher_rating();
+
+-- ---------------------------------------------------------------
+-- MIGRATION for projects that already ran the old version of this file
+-- (fixes teachers who show 5★ by default with 0 reviews, and adds the
+-- new maps_link column + reviews table). Safe to re-run.
+-- ---------------------------------------------------------------
+-- alter table teacher_profiles add column if not exists maps_link text default '';
+-- alter table teacher_profiles alter column rating set default 0;
+-- update teacher_profiles set rating = 0 where reviews = 0;

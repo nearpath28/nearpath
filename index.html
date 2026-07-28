@@ -194,8 +194,8 @@ table.data-table tr:hover td{ background: rgba(255,255,255,0.02); }
    SUPABASE CONFIG — fill these in from your Supabase project
    (Project Settings → API). See README.md for step-by-step setup.
 ========================================================= */
-const SUPABASE_URL = 'https://lchjmorojcuiawetgtqf.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxjaGptb3JvamN1aWF3ZXRndHFmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyMzA3NDcsImV4cCI6MjEwMDgwNjc0N30.IN0yTTBfYNfCoJF2AKgY-PKmqBb_mf6J-ku8HvxxrsY';
+const SUPABASE_URL = 'https://cloltuitbpxzjipskzhb.supabase.co/';
+const SUPABASE_ANON_KEY = 'sb_publishable_jxbHGhZSFqv6Aw1XNVQPfA_wMJr3ECi';
 const sb = (SUPABASE_URL.startsWith('http'))
   ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
@@ -241,11 +241,17 @@ let studentDataStatus = 'idle';
 let myStudents = [];       // enrollments-as-students, for the logged-in teacher
 let teacherDataStatus = 'idle';
 
+let myReviews = [];         // reviews the logged-in student has already left, keyed by enrollment_id
+let teacherReviews = [];    // reviews shown on a teacher's public profile page
+let teacherReviewsStatus = 'idle';
+let teacherReviewsForId = null;
+
 function nav(view, extra){
   state.view = view;
   if(extra) Object.assign(state, extra);
   window.scrollTo({top:0, behavior:'smooth'});
   if(view==='home' || view==='browse' || view==='teacherProfile') ensureTeachers();
+  if(view==='teacherProfile' && state.selectedTeacherId) ensureTeacherReviews(state.selectedTeacherId);
   if(view==='studentDashboard') ensureStudentData();
   if(view==='teacherDashboard') ensureTeacherData();
   render();
@@ -267,6 +273,12 @@ function starString(rating){
   const full = Math.round(rating||0);
   return '★'.repeat(full) + '☆'.repeat(5-full);
 }
+// Small inline badge for teacher cards — shows "New" instead of a fake
+// star rating for teachers who don't have any reviews yet.
+function ratingBadgeSmall(t){
+  if(!t.reviews) return `<div class="badge badge-blue">🆕 New</div>`;
+  return `<div class="badge badge-amber">${starString(t.rating)[0]} ${t.rating}</div>`;
+}
 
 /* =========================================================
    SUPABASE — AUTH
@@ -280,19 +292,29 @@ async function refreshProfile(){
   state.profile = data;
 }
 
+let lastAuthUserId = null;
+
 async function boot(){
   if(!isConfigured()){ render(); return; }
 
   sb.auth.onAuthStateChange(async (_event, session)=>{
     state.session = session;
-    await refreshProfile();
-    // invalidate any per-user cached data so a different account doesn't see stale data
-    studentDataStatus = 'idle'; teacherDataStatus = 'idle';
+    // Supabase fires this on token refresh, tab focus, etc — not just on
+    // actual login/logout. Only wipe cached dashboard data when the
+    // signed-in user id has genuinely changed, otherwise a dashboard
+    // that's already loaded gets reset to "loading" and never refetches.
+    const newUserId = session?.user?.id || null;
+    if(newUserId !== lastAuthUserId){
+      await refreshProfile();
+      studentDataStatus = 'idle'; teacherDataStatus = 'idle';
+      lastAuthUserId = newUserId;
+    }
     render();
   });
 
   const { data:{ session } } = await sb.auth.getSession();
   state.session = session;
+  lastAuthUserId = session?.user?.id || null;
   await refreshProfile();
 
   // support ?teacher=<id> deep links (e.g. shared from a teacher's dashboard)
@@ -382,7 +404,8 @@ async function ensureTeachers(force){
       subjects: t.subjects || [],
       location: t.location || 'Location not set',
       distance: t.distance || '—',
-      rating: t.rating ?? 5,
+      mapsLink: t.maps_link || '',
+      rating: t.rating ?? 0,
       reviews: t.reviews ?? 0,
       feeStart: t.fee_start ?? 0,
       feeUnit: t.fee_unit || '/month',
@@ -405,16 +428,18 @@ async function ensureStudentData(force){
   studentDataStatus = 'loading';
   try{
     const uid = state.session.user.id;
-    const [{data:enrollments, error:e1}, {data:payments, error:e2}] = await Promise.all([
+    const [{data:enrollments, error:e1}, {data:payments, error:e2}, {data:reviews, error:e3}] = await Promise.all([
       sb.from('enrollments').select('*, teacher_profiles(profiles(full_name))').eq('student_id', uid).order('created_at',{ascending:false}),
       sb.from('payments').select('*').eq('student_id', uid).order('paid_at',{ascending:false}),
+      sb.from('reviews').select('*').eq('student_id', uid),
     ]);
-    if(e1) throw e1; if(e2) throw e2;
+    if(e1) throw e1; if(e2) throw e2; if(e3) throw e3;
     myEnrollments = enrollments.map(e=>({
       id:e.id, teacherId:e.teacher_id, teacherName: e.teacher_profiles?.profiles?.full_name || 'Teacher',
       subject:e.subject, schedule:e.schedule, fee:e.fee, status:e.status, dueDate:e.due_date || '—',
     }));
     myPayments = payments;
+    myReviews = reviews;
     studentDataStatus = 'ready';
   }catch(err){
     console.error('Failed to load student dashboard data', err);
@@ -439,6 +464,22 @@ async function ensureTeacherData(force){
   }catch(err){
     console.error('Failed to load teacher dashboard data', err);
     teacherDataStatus = 'error';
+  }
+  render();
+}
+
+async function ensureTeacherReviews(teacherId, force){
+  if(teacherReviewsForId===teacherId && teacherReviewsStatus==='ready' && !force) return;
+  teacherReviewsForId = teacherId;
+  teacherReviewsStatus = 'loading';
+  try{
+    const { data, error } = await sb.from('reviews').select('rating, comment, created_at, profiles(full_name)').eq('teacher_id', teacherId).order('created_at',{ascending:false}).limit(30);
+    if(error) throw error;
+    teacherReviews = data;
+    teacherReviewsStatus = 'ready';
+  }catch(err){
+    console.error('Failed to load reviews', err);
+    teacherReviewsStatus = 'error';
   }
   render();
 }
@@ -553,7 +594,7 @@ function teacherCard(t){
         <div style="font-weight:700; font-size:15.5px;">${t.name}</div>
         <div class="muted" style="font-size:12.5px;">${cat.icon} ${t.subjects.join(', ') || 'No subjects listed'}</div>
       </div>
-      <div class="badge badge-amber">${starString(t.rating)[0]} ${t.rating}</div>
+      ${ratingBadgeSmall(t)}
     </div>
     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px;">
       <div class="muted" style="font-size:12.5px;">📍 ${t.distance}</div>
@@ -641,9 +682,11 @@ function viewTeacherProfile(){
               <h1 style="font-size:24px;">${t.name}</h1>
               <div class="muted" style="font-size:13.5px; margin-top:4px;">${cat.icon} ${t.subjects.join(' · ') || 'No subjects listed'} &nbsp;·&nbsp; ${t.experience} experience</div>
               <div style="display:flex; align-items:center; gap:10px; margin-top:8px;">
-                <span class="stars">${starString(t.rating)}</span>
-                <span style="font-weight:700; font-size:14px;">${t.rating}</span>
-                <span class="muted" style="font-size:13px;">(${t.reviews} reviews)</span>
+                ${t.reviews ? `
+                  <span class="stars">${starString(t.rating)}</span>
+                  <span style="font-weight:700; font-size:14px;">${t.rating}</span>
+                  <span class="muted" style="font-size:13px;">(${t.reviews} review${t.reviews!==1?'s':''})</span>
+                ` : `<span class="badge badge-blue">🆕 New — no reviews yet</span>`}
               </div>
             </div>
           </div>
@@ -651,6 +694,7 @@ function viewTeacherProfile(){
           <div style="display:flex; gap:16px; margin-top:20px; flex-wrap:wrap;">
             <div class="badge badge-blue">📍 ${t.location}</div>
             ${t.distance && t.distance!=='—' ? `<div class="badge badge-green">🚗 ${t.distance}</div>` : ''}
+            ${t.mapsLink ? `<a href="${t.mapsLink}" target="_blank" rel="noopener noreferrer" class="badge" style="background:rgba(79,168,245,0.15); color:var(--blue); cursor:pointer;">🗺️ Open in Google Maps</a>` : ''}
           </div>
         </div>
 
@@ -671,6 +715,11 @@ function viewTeacherProfile(){
             </div>`).join('')}
           </div>` : `<p class="muted" style="font-size:13.5px;">This teacher hasn't published a schedule yet.</p>`}
         </div>
+
+        <div class="glass" style="padding:28px; margin-top:20px;">
+          <h3 style="font-size:16px; margin-bottom:16px;">Reviews${t.reviews ? ` (${t.reviews})` : ''}</h3>
+          ${reviewsSectionBody()}
+        </div>
       </div>
 
       <div>
@@ -679,6 +728,7 @@ function viewTeacherProfile(){
           <div style="font-family:var(--mono); font-weight:700; font-size:30px; margin-top:6px;">${t.feeStart ? '₹'+t.feeStart : '—'}<span class="muted" style="font-size:15px; font-weight:400;">${t.feeStart?t.feeUnit:''}</span></div>
           <button class="btn btn-primary btn-block" style="margin-top:18px;" data-action="open-enquiry" data-id="${t.id}">✉️ Send enquiry</button>
           <button class="btn btn-ghost btn-block" style="margin-top:10px;" data-action="enroll-now" data-id="${t.id}">Enroll with this teacher</button>
+          ${t.mapsLink ? `<a href="${t.mapsLink}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost btn-block" style="margin-top:10px;">🗺️ Get directions</a>` : ''}
           <hr class="divider-dashed" style="margin:20px 0;">
           <div style="font-size:13px;" class="muted">
             <div style="display:flex; justify-content:space-between; padding:6px 0;"><span>Experience</span><span style="color:var(--text)">${t.experience}</span></div>
@@ -688,6 +738,22 @@ function viewTeacherProfile(){
         </div>
       </div>
     </div>
+  </div>`;
+}
+
+function reviewsSectionBody(){
+  if(teacherReviewsStatus==='loading') return `<p class="muted" style="font-size:13.5px;">Loading reviews…</p>`;
+  if(teacherReviewsStatus==='error') return `<p class="muted" style="font-size:13.5px;">Couldn't load reviews right now.</p>`;
+  if(!teacherReviews.length) return `<p class="muted" style="font-size:13.5px;">No reviews yet — be the first parent to leave one after a class.</p>`;
+  return `<div style="display:flex; flex-direction:column; gap:14px;">
+    ${teacherReviews.map(r=>`
+      <div style="padding-bottom:14px; border-bottom:1px solid rgba(255,255,255,0.06);">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-weight:700; font-size:13.5px;">${r.profiles?.full_name || 'A parent'}</span>
+          <span class="stars" style="font-size:12px;">${starString(r.rating)}</span>
+        </div>
+        ${r.comment ? `<p class="muted" style="font-size:13px; margin-top:6px; line-height:1.6;">${r.comment}</p>` : ''}
+      </div>`).join('')}
   </div>`;
 }
 
@@ -746,17 +812,24 @@ function viewStudentDashboard(){
         <div class="glass" style="padding:24px;">
           <h3 style="font-size:16px; margin-bottom:16px;">My enrollments</h3>
           ${myEnrollments.length ? `<div style="display:flex; flex-direction:column; gap:10px;">
-            ${myEnrollments.map(e=>`<div class="ticket">
+            ${myEnrollments.map(e=>{
+              const myReview = myReviews.find(r=>r.enrollment_id===e.id);
+              return `<div class="ticket">
                 <div class="ticket-stub" style="background:#6C5CE722; color:#6C5CE7;"><div class="t-day">${(e.schedule||'').slice(0,3).toUpperCase()||'—'}</div></div>
                 <div class="ticket-perf"></div>
-                <div class="ticket-body" style="display:flex; justify-content:space-between; align-items:center;">
+                <div class="ticket-body" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
                   <div>
                     <div style="font-weight:700; font-size:14.5px;">${e.subject}</div>
                     <div class="muted" style="font-size:12.5px;">with ${e.teacherName} · ${e.schedule||'schedule TBC'}</div>
                   </div>
-                  <span class="badge ${e.status==='paid'?'badge-green':e.status==='due'?'badge-amber':'badge-red'}">${e.status.toUpperCase()}</span>
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <span class="badge ${e.status==='paid'?'badge-green':e.status==='due'?'badge-amber':'badge-red'}">${e.status.toUpperCase()}</span>
+                    ${myReview
+                      ? `<span class="badge badge-blue" style="cursor:pointer;" data-action="open-review" data-id="${e.id}">${starString(myReview.rating)[0]} Edit review</span>`
+                      : `<button class="btn btn-ghost btn-sm" data-action="open-review" data-id="${e.id}">⭐ Leave a review</button>`}
+                  </div>
                 </div>
-              </div>`).join('')}
+              </div>`;}).join('')}
           </div>` : `<p class="muted" style="font-size:13.5px;">No enrollments yet — browse teachers and enroll to get started.</p><button class="btn btn-primary btn-sm" style="margin-top:12px;" data-action="go" data-view="browse">Browse teachers</button>`}
         </div>
       </div>
@@ -908,6 +981,9 @@ function teacherProfileEdit(){
     </div>
     <div class="field"><label class="field-label">Subjects (comma separated)</label><input class="input" id="peSubjects" value="${(t.subjects||[]).join(', ')}" placeholder="Mathematics, Physics"/></div>
     <div class="field"><label class="field-label">Location</label><input class="input" id="peLocation" value="${t.location||''}" placeholder="Sector 45, Gurugram"/></div>
+    <div class="field"><label class="field-label">Google Maps link (optional)</label><input class="input" id="peMapsLink" value="${t.maps_link||''}" placeholder="https://maps.app.goo.gl/..."/>
+      <p class="muted" style="font-size:12px; margin-top:6px;">Open Google Maps, find your place, tap Share, and paste the link here. Students will see it as a button on your profile.</p>
+    </div>
     <div class="field"><label class="field-label">Distance / area note (optional)</label><input class="input" id="peDistance" value="${t.distance||''}" placeholder="1.2 km"/></div>
     <div class="field"><label class="field-label">Experience</label><input class="input" id="peExperience" value="${t.experience||''}" placeholder="8 yrs"/></div>
     <div class="field"><label class="field-label">Monthly fee (₹)</label><input class="input" id="peFee" type="number" value="${t.fee_start||0}"/></div>
@@ -957,7 +1033,7 @@ function renderModal(){
 
 function enquiryModal(id){
   const t = TEACHERS.find(x=>x.id===id);
-  return `<div class="glass modal" onclick="event.stopPropagation()">
+  return `<div class="glass modal">
     <h3 style="font-size:18px; margin-bottom:4px;">Enquire with ${t.name}</h3>
     <p class="muted" style="font-size:13px; margin-bottom:18px;">They'll see this in their dashboard.</p>
     <div class="field"><label class="field-label">Message</label><textarea class="input" id="enquiryMsg" rows="3">Hi ${t.name}, I'd like to know more about your ${t.subjects[0]||'classes'}.</textarea></div>
@@ -968,9 +1044,31 @@ function enquiryModal(id){
   </div>`;
 }
 
+function reviewModal(enrollmentId){
+  const e = myEnrollments.find(x=>x.id===enrollmentId);
+  const existing = myReviews.find(r=>r.enrollment_id===enrollmentId);
+  const current = existing?.rating || 5;
+  return `<div class="glass modal">
+    <h3 style="font-size:18px; margin-bottom:4px;">Rate ${e.teacherName}</h3>
+    <p class="muted" style="font-size:13px; margin-bottom:18px;">For ${e.subject}. This helps other parents choose a teacher.</p>
+    <div class="field">
+      <label class="field-label">Rating</label>
+      <div id="reviewStars" style="display:flex; gap:6px; font-size:28px;">
+        ${[1,2,3,4,5].map(n=>`<span data-star="${n}" style="cursor:pointer; color:${n<=current?'var(--amber)':'var(--text-dimmer)'};" onclick="document.querySelectorAll('#reviewStars span').forEach((s,i)=>s.style.color = i<${n} ? 'var(--amber)':'var(--text-dimmer)'); document.getElementById('reviewRating').value=${n};">★</span>`).join('')}
+      </div>
+      <input type="hidden" id="reviewRating" value="${current}"/>
+    </div>
+    <div class="field"><label class="field-label">Comment (optional)</label><textarea class="input" id="reviewComment" rows="3" placeholder="How was the class?">${existing?.comment || ''}</textarea></div>
+    <div style="display:flex; gap:10px; margin-top:6px;">
+      <button class="btn btn-ghost btn-block" data-action="close-modal">Cancel</button>
+      <button class="btn btn-primary btn-block" data-action="submit-review" data-enrollment="${enrollmentId}" data-teacher="${e.teacherId}">Submit</button>
+    </div>
+  </div>`;
+}
+
 function payModal(){
   const totalDue = myEnrollments.filter(e=>e.status!=='paid').reduce((s,e)=>s+e.fee,0);
-  return `<div class="glass modal" onclick="event.stopPropagation()">
+  return `<div class="glass modal">
     <h3 style="font-size:18px; margin-bottom:4px;">Mark fees as paid</h3>
     <p class="muted" style="font-size:13px; margin-bottom:18px;">Total due across all enrollments. (This records the payment — it does not move real money.)</p>
     <div style="text-align:center; padding:20px 0;">
@@ -1020,6 +1118,12 @@ function render(){
   let html;
   if(NEEDS_TEACHERS.has(state.view) && teachersStatus !== 'ready'){
     html = navbar() + (teachersStatus === 'error' ? errorScreen('teachers') : loadingScreen('teachers'));
+  }else if(state.view==='studentDashboard' && state.session && state.profile?.role==='student' && studentDataStatus==='idle'){
+    ensureStudentData(); // status was reset (e.g. by a background auth refresh) — refetch instead of showing a permanent loader
+    html = navbar() + loadingScreen('your dashboard');
+  }else if(state.view==='teacherDashboard' && state.session && state.profile?.role==='teacher' && teacherDataStatus==='idle'){
+    ensureTeacherData();
+    html = navbar() + loadingScreen('your dashboard');
   }else{
     html = views[state.view]();
   }
@@ -1059,7 +1163,11 @@ document.addEventListener('click', (e)=>{
       openModal(enquiryModal(el.dataset.id));
       break;
     case 'close-modal':
-      closeModal();
+      // el is whichever ancestor carries data-action="close-modal" — that's
+      // only ever the backdrop itself (buttons inside the modal have their
+      // own data-action). Only close if the click landed on that element
+      // directly, so clicking inside the modal box doesn't dismiss it.
+      if(e.target === el) closeModal();
       break;
     case 'send-enquiry': {
       const msg = document.getElementById('enquiryMsg').value;
@@ -1117,6 +1225,27 @@ document.addEventListener('click', (e)=>{
     case 'save-profile':
       saveTeacherProfile();
       break;
+    case 'open-review':
+      openModal(reviewModal(parseInt(el.dataset.id)));
+      break;
+    case 'submit-review': {
+      const enrollmentId = parseInt(el.dataset.enrollment);
+      const teacherId = el.dataset.teacher;
+      const rating = parseInt(document.getElementById('reviewRating').value);
+      const comment = document.getElementById('reviewComment').value.trim();
+      sb.from('reviews').upsert({
+        teacher_id: teacherId, student_id: state.session.user.id, enrollment_id: enrollmentId,
+        rating, comment,
+      }, { onConflict: 'enrollment_id' }).then(({error})=>{
+        if(error){ toast('❌ ' + error.message, 'err'); return; }
+        closeModal();
+        toast('✅ Thanks for the review!', 'ok');
+        studentDataStatus = 'idle';
+        ensureStudentData(true);
+        ensureTeachers(true); // refresh the teacher's averaged rating everywhere it's shown
+      });
+      break;
+    }
     case 'open-pay':
       openModal(payModal());
       break;
@@ -1144,6 +1273,7 @@ async function saveTeacherProfile(){
     category: document.getElementById('peCategory').value,
     subjects: document.getElementById('peSubjects').value.split(',').map(s=>s.trim()).filter(Boolean),
     location: document.getElementById('peLocation').value,
+    maps_link: document.getElementById('peMapsLink').value.trim(),
     distance: document.getElementById('peDistance').value,
     experience: document.getElementById('peExperience').value,
     fee_start: parseInt(document.getElementById('peFee').value) || 0,
