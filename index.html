@@ -335,7 +335,12 @@ async function signUpStudent(name, email, password){
     await sb.from('profiles').insert({ id:data.user.id, role:'student', full_name:name });
   }
   if(data.session){
+    state.session = data.session;
+    lastAuthUserId = data.session.user.id;
+    await refreshProfile();
+    studentDataStatus = 'idle';
     toast('🎉 Account created!', 'ok');
+    nav('studentDashboard');
   }else{
     toast('✅ Account created — check your email to confirm, then log in.', 'ok');
     state.studentAuthMode = 'login';
@@ -345,9 +350,14 @@ async function signUpStudent(name, email, password){
 
 async function signInStudent(email, password){
   if(!email || !password) return toast('Please fill in all fields', 'warn');
-  const { error } = await sb.auth.signInWithPassword({ email, password });
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
   if(error) return toast('❌ ' + error.message, 'err');
+  state.session = data.session;
+  lastAuthUserId = data.session?.user?.id || null;
+  await refreshProfile();
+  studentDataStatus = 'idle';
   toast('👋 Logged in successfully', 'ok');
+  nav('studentDashboard');
 }
 
 async function signUpTeacher(name, email, password){
@@ -364,7 +374,12 @@ async function signUpTeacher(name, email, password){
     });
   }
   if(data.session){
+    state.session = data.session;
+    lastAuthUserId = data.session.user.id;
+    await refreshProfile();
+    teacherDataStatus = 'idle';
     toast('🎉 Teacher account created — fill in your profile so students can find you.', 'ok');
+    nav('teacherDashboard');
   }else{
     toast('✅ Account created — check your email to confirm, then log in.', 'ok');
     state.teacherAuthMode = 'login';
@@ -374,9 +389,14 @@ async function signUpTeacher(name, email, password){
 
 async function signInTeacher(email, password){
   if(!email || !password) return toast('Please fill in all fields', 'warn');
-  const { error } = await sb.auth.signInWithPassword({ email, password });
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
   if(error) return toast('❌ ' + error.message, 'err');
+  state.session = data.session;
+  lastAuthUserId = data.session?.user?.id || null;
+  await refreshProfile();
+  teacherDataStatus = 'idle';
   toast('👋 Welcome back', 'ok');
+  nav('teacherDashboard');
 }
 
 async function logout(){
@@ -879,8 +899,8 @@ function viewTeacherHome(){
       <h1 style="font-size:40px; margin:14px 0 16px; max-width:640px; margin-left:auto; margin-right:auto; line-height:1.15;">Fill your batches. Get paid on time. Skip the spreadsheets.</h1>
       <p class="muted" style="font-size:16px; max-width:520px; margin:0 auto 30px;">List your profile, manage your students and schedule, and track fees — all from one dashboard.</p>
       <div style="display:flex; gap:12px; justify-content:center;">
-        <button class="btn btn-primary" data-action="go" data-view="teacherAuth">Register as a teacher</button>
-        <button class="btn btn-ghost" data-action="go" data-view="teacherAuth">Log in</button>
+        <button class="btn btn-primary" data-action="go" data-view="teacherAuth" data-mode="signup">Register as a teacher</button>
+        <button class="btn btn-ghost" data-action="go" data-view="teacherAuth" data-mode="login">Log in</button>
       </div>
     </div>
     <div style="margin-top:56px; display:grid; grid-template-columns:repeat(4,1fr); gap:16px;" class="grid-2 fade-in">
@@ -1138,6 +1158,8 @@ document.addEventListener('click', (e)=>{
     case 'go-home':
       nav(state.portal==='customer' ? 'home' : 'teacherHome'); break;
     case 'go':
+      if(el.dataset.mode && el.dataset.view==='teacherAuth') state.teacherAuthMode = el.dataset.mode;
+      if(el.dataset.mode && el.dataset.view==='studentAuth') state.studentAuthMode = el.dataset.mode;
       nav(el.dataset.view); break;
     case 'switch-portal':
       state.portal = el.dataset.portal;
