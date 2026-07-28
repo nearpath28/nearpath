@@ -17,7 +17,8 @@ create table teacher_profiles (
   category text default 'academics',
   subjects text[] default '{}',
   location text default '',
-  distance text default '',
+  lat double precision,
+  lng double precision,
   maps_link text default '',
   fee_start int default 0,
   fee_unit text default '/month',
@@ -158,3 +159,13 @@ for each row execute function update_teacher_rating();
 -- alter table teacher_profiles add column if not exists maps_link text default '';
 -- alter table teacher_profiles alter column rating set default 0;
 -- update teacher_profiles set rating = 0 where reviews = 0;
+
+-- ---------------------------------------------------------------
+-- MIGRATION: replaces the old manual "distance" text field with real
+-- coordinates, so a student's own location can be used to calculate an
+-- automatic, live distance to each teacher instead of a note the teacher
+-- typed in by hand. Safe to re-run.
+-- ---------------------------------------------------------------
+-- alter table teacher_profiles add column if not exists lat double precision;
+-- alter table teacher_profiles add column if not exists lng double precision;
+-- alter table teacher_profiles drop column if exists distance;

@@ -276,7 +276,76 @@ const state = {
   teacherTab: 'overview',
   studentAuthMode: 'login',   // 'login' | 'signup'
   teacherAuthMode: 'login',
+  myLocation: null,      // { lat, lng } for the person browsing — used to auto-calc distance to each teacher
+  locatingMe: false,     // true while a geolocation request is in flight
 };
+try{
+  var savedLoc = localStorage.getItem('npt-my-location');
+  if(savedLoc) state.myLocation = JSON.parse(savedLoc);
+}catch(e){}
+const locationPreviouslyDeclined = (()=>{ try{ return localStorage.getItem('npt-location-declined')==='1'; }catch(e){ return false; } })();
+
+// Great-circle distance between two lat/lng points, in km (Haversine formula).
+function haversineKm(lat1, lng1, lat2, lng2){
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI/180;
+  const dLng = (lng2 - lng1) * Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// Formatted distance from the browsing person to a teacher, or null if
+// either side's coordinates aren't known yet. Always expressed in km.
+function distanceToTeacher(t){
+  if(!state.myLocation || t.lat==null || t.lng==null) return null;
+  const km = haversineKm(state.myLocation.lat, state.myLocation.lng, t.lat, t.lng);
+  return (km < 0.1 ? '<0.1' : km.toFixed(1)) + ' km away';
+}
+
+// Ask the browser for the person's current location, store it, and
+// re-render whatever list/profile is on screen with fresh distances.
+function useMyLocation(){
+  if(!navigator.geolocation){ toast('Location isn\'t supported in this browser', 'warn'); return; }
+  state.locatingMe = true;
+  render();
+  navigator.geolocation.getCurrentPosition(
+    (pos)=>{
+      state.myLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      state.locatingMe = false;
+      try{ localStorage.setItem('npt-my-location', JSON.stringify(state.myLocation)); }catch(e){}
+      toast('📍 Location set — distances updated', 'ok');
+      render();
+    },
+    (err)=>{
+      state.locatingMe = false;
+      toast('❌ Couldn\'t get your location — check permissions and try again', 'err');
+      render();
+    },
+    { enableHighAccuracy:false, timeout:10000 }
+  );
+}
+
+// Same as useMyLocation, but for the one-time entry prompt: gives the
+// button in the modal instant feedback and closes the modal when done.
+function useMyLocationOnboarding(){
+  if(!navigator.geolocation){ toast('Location isn\'t supported in this browser', 'warn'); closeModal(); return; }
+  const btn = document.querySelector('[data-action="onboarding-location-allow"]');
+  if(btn){ btn.disabled = true; btn.textContent = 'Locating…'; }
+  navigator.geolocation.getCurrentPosition(
+    (pos)=>{
+      state.myLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      try{ localStorage.setItem('npt-my-location', JSON.stringify(state.myLocation)); }catch(e){}
+      closeModal();
+      toast('📍 Location set — distances updated', 'ok');
+      render();
+    },
+    (err)=>{
+      closeModal();
+      toast('❌ Couldn\'t get your location — check permissions and try again', 'err');
+    },
+    { enableHighAccuracy:false, timeout:10000 }
+  );
+}
 
 let TEACHERS = [];
 let teachersStatus = 'idle'; // idle | loading | ready | error
@@ -380,6 +449,13 @@ async function boot(){
 
   ensureTeachers();
   render();
+
+  // Ask for the person's location once on entry, so teacher cards can show
+  // a live distance right away. Skipped if we already have a location, or
+  // they've dismissed this prompt on a previous visit.
+  if(!state.myLocation && !locationPreviouslyDeclined){
+    openModal(locationPromptModal());
+  }
 }
 
 async function signUpStudent(name, email, password){
@@ -426,7 +502,7 @@ async function signUpTeacher(name, email, password){
     await sb.from('teacher_profiles').insert({
       profile_id:data.user.id, initials: name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase(),
       color: AVATAR_COLORS[Math.floor(Math.random()*AVATAR_COLORS.length)], category:'academics',
-      subjects:[], location:'', distance:'', fee_start:0, fee_unit:'/month', experience:'', bio:'',
+      subjects:[], location:'', lat:null, lng:null, fee_start:0, fee_unit:'/month', experience:'', bio:'',
     });
   }
   if(data.session){
@@ -479,7 +555,8 @@ async function ensureTeachers(force){
       category: t.category,
       subjects: t.subjects || [],
       location: t.location || 'Location not set',
-      distance: t.distance || '—',
+      lat: t.lat ?? null,
+      lng: t.lng ?? null,
       mapsLink: t.maps_link || '',
       rating: t.rating ?? 0,
       reviews: t.reviews ?? 0,
@@ -684,7 +761,7 @@ function teacherCard(t){
       ${ratingBadgeSmall(t)}
     </div>
     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px;">
-      <div class="muted" style="font-size:12.5px;">📍 ${t.distance}</div>
+      <div class="muted" style="font-size:12.5px;">📍 ${distanceToTeacher(t) || t.location}</div>
       <div style="font-family:var(--mono); font-weight:700; font-size:14px;">${t.feeStart ? '₹'+t.feeStart : 'Fee not set'}<span class="muted" style="font-weight:400;">${t.feeStart?t.feeUnit:''}</span></div>
     </div>
     <button class="btn btn-ghost btn-block btn-sm" style="margin-top:14px;" data-action="view-teacher" data-id="${t.id}">View Profile</button>
@@ -716,6 +793,13 @@ function viewBrowse(){
       <div>
         <div class="glass" style="padding:16px; margin-bottom:20px;">
           <input class="input" placeholder="Search by name or subject…" id="browseSearch" value="${state.filters.query}" oninput="state.filters.query=this.value; renderList();" />
+        </div>
+        <div class="glass" style="padding:14px 16px; margin-bottom:20px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+          ${state.myLocation
+            ? `<div class="muted" style="font-size:12.5px;">📍 Showing distance from your current location</div>
+               <button class="btn btn-ghost btn-sm" data-action="use-my-location">Update location</button>`
+            : `<div class="muted" style="font-size:12.5px;">Share your location to see how far each teacher is</div>
+               <button class="btn btn-primary btn-sm" data-action="use-my-location" ${state.locatingMe?'disabled':''}>${state.locatingMe?'Locating…':'📍 Use my location'}</button>`}
         </div>
         <div class="grid-cards stagger" id="teacherList">
           ${list.length ? list.map(teacherCard).join('') : `<div class="glass" style="padding:40px; text-align:center; grid-column:1/-1;"><div style="font-size:32px;">🔍</div><p class="muted" style="margin-top:10px;">No teachers match these filters. Try widening your search.</p></div>`}
@@ -780,7 +864,7 @@ function viewTeacherProfile(){
           <p style="margin-top:20px; line-height:1.7; font-size:14.5px;" class="muted">${t.bio}</p>
           <div style="display:flex; gap:16px; margin-top:20px; flex-wrap:wrap;">
             <div class="badge badge-blue">📍 ${t.location}</div>
-            ${t.distance && t.distance!=='—' ? `<div class="badge badge-green">🚗 ${t.distance}</div>` : ''}
+            ${distanceToTeacher(t) ? `<div class="badge badge-green">🚗 ${distanceToTeacher(t)}</div>` : `<div class="badge" style="cursor:pointer;" data-action="use-my-location">📍 See distance from you</div>`}
             ${t.mapsLink ? `<a href="${t.mapsLink}" target="_blank" rel="noopener noreferrer" class="badge" style="background:rgba(79,168,245,0.15); color:var(--blue); cursor:pointer;">🗺️ Open in Google Maps</a>` : ''}
           </div>
         </div>
@@ -821,6 +905,7 @@ function viewTeacherProfile(){
             <div style="display:flex; justify-content:space-between; padding:6px 0;"><span>Experience</span><span style="color:var(--text)">${t.experience}</span></div>
             <div style="display:flex; justify-content:space-between; padding:6px 0;"><span>Category</span><span style="color:var(--text)">${cat.icon} ${cat.label}</span></div>
             <div style="display:flex; justify-content:space-between; padding:6px 0;"><span>Location</span><span style="color:var(--text)">${t.location}</span></div>
+            ${distanceToTeacher(t) ? `<div style="display:flex; justify-content:space-between; padding:6px 0;"><span>Distance</span><span style="color:var(--text)">${distanceToTeacher(t)}</span></div>` : ''}
           </div>
         </div>
       </div>
@@ -1093,7 +1178,16 @@ function teacherProfileEdit(){
     <div class="field"><label class="field-label">Google Maps link (optional)</label><input class="input" id="peMapsLink" value="${t.maps_link||''}" placeholder="https://maps.app.goo.gl/..."/>
       <p class="muted" style="font-size:12px; margin-top:6px;">Open Google Maps, find your place, tap Share, and paste the link here. Students will see it as a button on your profile.</p>
     </div>
-    <div class="field"><label class="field-label">Distance / area note (optional)</label><input class="input" id="peDistance" value="${t.distance||''}" placeholder="1.2 km"/></div>
+    <div class="field">
+      <label class="field-label">Teaching location (for automatic distance)</label>
+      <input type="hidden" id="peLat" value="${t.lat ?? ''}"/>
+      <input type="hidden" id="peLng" value="${t.lng ?? ''}"/>
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <button type="button" class="btn btn-ghost btn-sm" data-action="teacher-set-location" ${state.locatingMe?'disabled':''}>${state.locatingMe?'Locating…':'📍 Use my current location'}</button>
+        <span class="muted" style="font-size:12.5px;" id="peLocStatus">${(t.lat!=null && t.lng!=null) ? 'Location set — students will see their distance to you' : 'Not set yet — students won\'t see a distance until you set this'}</span>
+      </div>
+      <p class="muted" style="font-size:12px; margin-top:6px;">Stand at (or near) where you teach and tap the button — this replaces typing in a distance by hand, since it's calculated live from each student's own location.</p>
+    </div>
     <div class="field"><label class="field-label">Experience</label><input class="input" id="peExperience" value="${t.experience||''}" placeholder="8 yrs"/></div>
     <div class="field"><label class="field-label">Monthly fee (₹)</label><input class="input" id="peFee" type="number" value="${t.fee_start||0}"/></div>
     <div class="field"><label class="field-label">Bio</label><textarea class="input" id="peBio" rows="3" placeholder="Tell parents about your teaching style...">${t.bio||''}</textarea></div>
@@ -1138,6 +1232,21 @@ function renderModal(){
   let root = document.getElementById('modalRoot');
   if(!root){ root = document.createElement('div'); root.id='modalRoot'; document.body.appendChild(root); }
   root.innerHTML = modalHTML ? `<div class="modal-backdrop" data-action="close-modal">${modalHTML}</div>` : '';
+}
+
+function locationPromptModal(){
+  return `<div class="glass modal" style="text-align:center;">
+    <div style="font-size:34px;">📍</div>
+    <h3 style="font-size:18px; margin-top:10px;">Find teachers near you</h3>
+    <p class="muted" style="font-size:13.5px; margin-top:6px; line-height:1.5;">
+      Share your location and every teacher card will show exactly how far
+      they are from you, in km. You can change this anytime.
+    </p>
+    <div style="display:flex; gap:10px; margin-top:20px;">
+      <button class="btn btn-ghost btn-block" data-action="onboarding-location-skip">Not now</button>
+      <button class="btn btn-primary btn-block" data-action="onboarding-location-allow">Share my location</button>
+    </div>
+  </div>`;
 }
 
 function enquiryModal(id){
@@ -1339,6 +1448,48 @@ document.addEventListener('click', (e)=>{
     case 'save-profile':
       saveTeacherProfile();
       break;
+    case 'use-my-location':
+      useMyLocation();
+      break;
+    case 'onboarding-location-allow':
+      useMyLocationOnboarding();
+      break;
+    case 'onboarding-location-skip':
+      try{ localStorage.setItem('npt-location-declined', '1'); }catch(e){}
+      closeModal();
+      break;
+    case 'teacher-set-location': {
+      // Updates the DOM directly rather than calling render() — a full
+      // re-render would regenerate this form from state.selectedTeacherProfile
+      // and discard any other unsaved field edits the teacher has typed.
+      if(!navigator.geolocation){ toast('Location isn\'t supported in this browser', 'warn'); break; }
+      const btn = el;
+      const originalLabel = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Locating…';
+      navigator.geolocation.getCurrentPosition(
+        (pos)=>{
+          const latEl = document.getElementById('peLat');
+          const lngEl = document.getElementById('peLng');
+          const statusEl = document.getElementById('peLocStatus');
+          if(latEl && lngEl){
+            latEl.value = pos.coords.latitude;
+            lngEl.value = pos.coords.longitude;
+          }
+          if(statusEl) statusEl.textContent = 'Location set — students will see their distance to you';
+          btn.disabled = false;
+          btn.textContent = originalLabel;
+          toast('📍 Teaching location captured — remember to save changes', 'ok');
+        },
+        ()=>{
+          btn.disabled = false;
+          btn.textContent = originalLabel;
+          toast('❌ Couldn\'t get your location — check permissions and try again', 'err');
+        },
+        { enableHighAccuracy:false, timeout:10000 }
+      );
+      break;
+    }
     case 'open-review':
       openModal(reviewModal(parseInt(el.dataset.id)));
       break;
@@ -1388,7 +1539,8 @@ async function saveTeacherProfile(){
     subjects: document.getElementById('peSubjects').value.split(',').map(s=>s.trim()).filter(Boolean),
     location: document.getElementById('peLocation').value,
     maps_link: document.getElementById('peMapsLink').value.trim(),
-    distance: document.getElementById('peDistance').value,
+    lat: document.getElementById('peLat').value ? parseFloat(document.getElementById('peLat').value) : null,
+    lng: document.getElementById('peLng').value ? parseFloat(document.getElementById('peLng').value) : null,
     experience: document.getElementById('peExperience').value,
     fee_start: parseInt(document.getElementById('peFee').value) || 0,
     bio: document.getElementById('peBio').value,
