@@ -56,7 +56,8 @@ create table enrollments (
   status text not null default 'due' check (status in ('due','overdue','paid')),
   due_date date,
   grade text,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  unique (student_id, teacher_id, subject)
 );
 
 -- 6) payments: a record each time fees are marked paid

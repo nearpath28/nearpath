@@ -27,35 +27,6 @@
   --mono: 'JetBrains Mono', monospace;
   --display: 'Fraunces', serif;
   --body: 'Inter', sans-serif;
-  /* theme-aware surface tokens (swapped by [data-theme="light"] below) */
-  --input-bg: rgba(255,255,255,0.05);
-  --input-bg-focus: rgba(255,255,255,0.08);
-  --scrollbar-thumb: rgba(255,255,255,0.15);
-  --shadow-card: rgba(0,0,0,0.5);
-  --divider: rgba(255,255,255,0.06);
-  --divider-soft: rgba(255,255,255,0.03);
-  --backdrop: rgba(5,6,20,0.68);
-  --blob-opacity: 0.45;
-  color-scheme: dark;
-}
-:root[data-theme="light"]{
-  --bg:#F4F3FA;
-  --bg2:#FFFFFF;
-  --glass: rgba(30,26,70,0.045);
-  --glass-hi: rgba(30,26,70,0.08);
-  --glass-border: rgba(30,26,70,0.13);
-  --text:#211E3D;
-  --text-dim:#5C5885;
-  --text-dimmer:#8B87AC;
-  --input-bg: rgba(30,26,70,0.04);
-  --input-bg-focus: rgba(30,26,70,0.07);
-  --scrollbar-thumb: rgba(30,26,70,0.18);
-  --shadow-card: rgba(30,26,70,0.16);
-  --divider: rgba(30,26,70,0.09);
-  --divider-soft: rgba(30,26,70,0.045);
-  --backdrop: rgba(225,224,240,0.75);
-  --blob-opacity: 0.22;
-  color-scheme: light;
 }
 *{box-sizing:border-box; margin:0; padding:0;}
 html{scroll-behavior:smooth;}
@@ -66,16 +37,15 @@ body{
   min-height:100vh;
   overflow-x:hidden;
   position:relative;
-  transition: background .3s ease, color .3s ease;
 }
 ::selection{ background: var(--primary); color:#fff; }
 ::-webkit-scrollbar{ width:10px; }
 ::-webkit-scrollbar-track{ background: transparent; }
-::-webkit-scrollbar-thumb{ background: var(--scrollbar-thumb); border-radius:10px; }
+::-webkit-scrollbar-thumb{ background: rgba(255,255,255,0.15); border-radius:10px; }
 
 /* ---------- floating gradient blobs ---------- */
 .blobs{ position:fixed; inset:0; z-index:0; overflow:hidden; pointer-events:none; }
-.blob{ position:absolute; border-radius:50%; filter: blur(90px); opacity: var(--blob-opacity); }
+.blob{ position:absolute; border-radius:50%; filter: blur(90px); opacity:0.45; }
 .blob1{ width:520px; height:520px; background: radial-gradient(circle, var(--primary), transparent 70%); top:-160px; left:-120px; animation: float1 22s ease-in-out infinite; }
 .blob2{ width:460px; height:460px; background: radial-gradient(circle, var(--primary2), transparent 70%); top:20%; right:-160px; animation: float2 26s ease-in-out infinite; }
 .blob3{ width:380px; height:380px; background: radial-gradient(circle, var(--blue), transparent 70%); bottom:-140px; left:20%; animation: float3 20s ease-in-out infinite; }
@@ -117,18 +87,12 @@ h1,h2,h3,h4{ font-family: var(--display); font-weight:600; letter-spacing:-0.01e
 .pill:hover{ background: var(--glass-hi); transform: translateY(-1px); }
 .pill.active{ background: linear-gradient(135deg, var(--primary), var(--primary2)); border-color:transparent; color:#fff; }
 .input{
-  width:100%; background: var(--input-bg); border:1px solid var(--glass-border);
+  width:100%; background: rgba(255,255,255,0.05); border:1px solid var(--glass-border);
   color:var(--text); padding:13px 16px; border-radius:12px; font-family:var(--body); font-size:14px; outline:none;
   transition: border-color .2s ease, background .2s ease;
 }
-.input:focus{ border-color: var(--primary); background: var(--input-bg-focus); }
+.input:focus{ border-color: var(--primary); background: rgba(255,255,255,0.08); }
 .input::placeholder{ color: var(--text-dimmer); }
-/* selects render their closed box with our theme, but the browser draws the
-   open dropdown list using native OS colors — color-scheme + explicit
-   option colors keep that list readable in both themes instead of e.g.
-   pale text on a pale popup. */
-select.input{ cursor:pointer; }
-select.input option{ background: var(--bg2); color: var(--text); }
 label.field-label{ display:block; font-size:12.5px; font-weight:600; color:var(--text-dim); margin-bottom:6px; font-family:var(--mono); letter-spacing:0.03em; }
 .field{ margin-bottom:16px; }
 .badge{ display:inline-flex; align-items:center; gap:5px; padding:4px 10px; border-radius:100px; font-size:11.5px; font-weight:700; font-family:var(--mono); letter-spacing:0.02em; }
@@ -137,7 +101,7 @@ label.field-label{ display:block; font-size:12.5px; font-weight:600; color:var(-
 .badge-red{ background: rgba(251,106,106,0.15); color: var(--red); }
 .badge-blue{ background: rgba(79,168,245,0.15); color: var(--blue); }
 .card{ transition: transform .3s cubic-bezier(.2,.9,.3,1), box-shadow .3s ease; }
-.card:hover{ transform: translateY(-6px); box-shadow: 0 20px 40px -16px var(--shadow-card); }
+.card:hover{ transform: translateY(-6px); box-shadow: 0 20px 40px -16px rgba(0,0,0,0.5); }
 .fade-in{ animation: fadeIn .5s ease both; }
 @keyframes fadeIn{ from{ opacity:0; transform: translateY(14px);} to{ opacity:1; transform:translateY(0);} }
 .stagger > *{ animation: fadeIn .5s ease both; }
@@ -149,7 +113,7 @@ label.field-label{ display:block; font-size:12.5px; font-weight:600; color:var(-
 @keyframes viewIn{ from{ opacity:0; transform: translateY(18px) scale(0.99);} to{ opacity:1; transform:translateY(0) scale(1);} }
 a{ color:inherit; text-decoration:none; }
 .stars{ display:inline-flex; gap:2px; color: var(--amber); font-size:14px; letter-spacing:1px; }
-.divider-dashed{ border:none; border-top:2px dashed var(--scrollbar-thumb); margin:0; }
+.divider-dashed{ border:none; border-top:2px dashed rgba(255,255,255,0.15); margin:0; }
 .avatar{ border-radius:50%; display:flex; align-items:center; justify-content:center; font-family:var(--display); font-weight:600; flex-shrink:0; color:#fff; }
 .scroll-x{ display:flex; gap:10px; overflow-x:auto; padding-bottom:6px; scrollbar-width:none; }
 .scroll-x::-webkit-scrollbar{ display:none; }
@@ -157,7 +121,7 @@ a{ color:inherit; text-decoration:none; }
 .toast-wrap{ position:fixed; top:20px; right:20px; z-index:999; display:flex; flex-direction:column; gap:10px; }
 .toast{ padding:14px 20px; border-radius:14px; font-size:14px; font-weight:600; min-width:260px; animation: toastIn .35s cubic-bezier(.2,.9,.3,1.2) both; display:flex; align-items:center; gap:10px;}
 @keyframes toastIn{ from{ opacity:0; transform: translateX(40px);} to{ opacity:1; transform:translateX(0);} }
-.modal-backdrop{ position:fixed; inset:0; background:var(--backdrop); backdrop-filter: blur(6px); z-index:200; display:flex; align-items:center; justify-content:center; padding:20px; animation: fadeIn .25s ease both; }
+.modal-backdrop{ position:fixed; inset:0; background:rgba(5,6,20,0.68); backdrop-filter: blur(6px); z-index:200; display:flex; align-items:center; justify-content:center; padding:20px; animation: fadeIn .25s ease both; }
 .modal{ width:100%; max-width:460px; max-height:88vh; overflow-y:auto; animation: modalIn .35s cubic-bezier(.2,.9,.3,1.15) both; padding:28px; }
 @keyframes modalIn{ from{ opacity:0; transform: translateY(30px) scale(0.96);} to{ opacity:1; transform:translateY(0) scale(1);} }
 
@@ -169,7 +133,7 @@ a{ color:inherit; text-decoration:none; }
 .ticket-stub{ width:86px; flex-shrink:0; display:flex; flex-direction:column; align-items:center; justify-content:center; font-family:var(--mono); position:relative; }
 .ticket-stub .t-day{ font-size:11px; letter-spacing:0.08em; opacity:0.85; }
 .ticket-stub .t-time{ font-size:13px; font-weight:700; margin-top:4px; text-align:center; }
-.ticket-perf{ width:0; border-left:2px dashed var(--glass-border); position:relative; }
+.ticket-perf{ width:0; border-left:2px dashed rgba(255,255,255,0.25); position:relative; }
 .ticket-perf::before, .ticket-perf::after{ content:''; position:absolute; width:14px; height:14px; background:var(--bg); border-radius:50%; left:-8px; }
 .ticket-perf::before{ top:-7px; } .ticket-perf::after{ bottom:-7px; }
 .ticket-body{ flex:1; padding:14px 18px; }
@@ -186,14 +150,14 @@ a{ color:inherit; text-decoration:none; }
 /* calendar */
 .cal-grid{ display:grid; grid-template-columns: repeat(7, 1fr); gap:8px; }
 .cal-head{ font-family:var(--mono); font-size:11px; text-align:center; color:var(--text-dimmer); padding-bottom:4px; }
-.cal-cell{ aspect-ratio:1; border-radius:10px; background: var(--divider-soft); border:1px solid var(--divider); display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:12.5px; position:relative; }
+.cal-cell{ aspect-ratio:1; border-radius:10px; background: rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:12.5px; position:relative; }
 .cal-cell.has-class{ background: rgba(108,92,231,0.18); border-color: rgba(108,92,231,0.4); }
 .cal-cell .dot{ width:5px; height:5px; border-radius:50%; background: var(--primary2); position:absolute; bottom:5px; }
 
 table.data-table{ width:100%; border-collapse:collapse; font-size:13.5px; }
 table.data-table th{ text-align:left; font-family:var(--mono); font-size:11px; letter-spacing:0.04em; text-transform:uppercase; color:var(--text-dimmer); padding:10px 12px; border-bottom:1px solid var(--glass-border); }
-table.data-table td{ padding:12px; border-bottom:1px solid var(--divider-soft); }
-table.data-table tr:hover td{ background: var(--divider-soft); }
+table.data-table td{ padding:12px; border-bottom:1px solid rgba(255,255,255,0.05); }
+table.data-table tr:hover td{ background: rgba(255,255,255,0.02); }
 
 .sidebar-link{ display:flex; align-items:center; gap:10px; padding:11px 14px; border-radius:12px; color:var(--text-dim); font-weight:600; font-size:14px; cursor:pointer; transition: all .2s ease; }
 .sidebar-link:hover{ background: var(--glass); color:var(--text); }
@@ -217,17 +181,6 @@ table.data-table tr:hover td{ background: var(--divider-soft); }
 </style>
 </head>
 <body>
-<script>
-// Apply the saved (or OS-preferred) theme immediately, before anything
-// renders, so the page never flashes the wrong theme on load.
-(function(){
-  try{
-    var saved = localStorage.getItem('npt-theme');
-    var theme = saved || ((window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark');
-    document.documentElement.setAttribute('data-theme', theme);
-  }catch(e){ document.documentElement.setAttribute('data-theme', 'dark'); }
-})();
-</script>
 <div class="blobs">
   <div class="blob blob1"></div><div class="blob blob2"></div><div class="blob blob3"></div><div class="blob blob4"></div>
 </div>
@@ -286,13 +239,18 @@ let myPayments = [];
 let studentDataStatus = 'idle';
 
 let myStudents = [];       // enrollments-as-students, for the logged-in teacher
-let myEnquiries = [];      // enquiries a teacher has received from students
 let teacherDataStatus = 'idle';
 
 let myReviews = [];         // reviews the logged-in student has already left, keyed by enrollment_id
 let teacherReviews = [];    // reviews shown on a teacher's public profile page
 let teacherReviewsStatus = 'idle';
 let teacherReviewsForId = null;
+
+// Where to send the user back to once they finish logging in/signing up —
+// set right before we redirect them to the auth screen from an action like
+// "Enroll now" or "Send enquiry" that requires a session. Shape: {view, extra}.
+let postLoginRedirect = null;
+let enrollInFlight = false; // guards against duplicate rows from a double-click
 
 function nav(view, extra){
   state.view = view;
@@ -303,14 +261,6 @@ function nav(view, extra){
   if(view==='studentDashboard') ensureStudentData();
   if(view==='teacherDashboard') ensureTeacherData();
   render();
-}
-
-function currentTheme(){ return document.documentElement.getAttribute('data-theme') || 'dark'; }
-function toggleTheme(){
-  const next = currentTheme()==='dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', next);
-  try{ localStorage.setItem('npt-theme', next); }catch(e){}
-  render(); // re-render so the toggle button's icon/label stays in sync
 }
 
 function toast(msg, type){
@@ -396,7 +346,8 @@ async function signUpStudent(name, email, password){
     await refreshProfile();
     studentDataStatus = 'idle';
     toast('🎉 Account created!', 'ok');
-    nav('studentDashboard');
+    if(postLoginRedirect){ const r = postLoginRedirect; postLoginRedirect = null; nav(r.view, r.extra); }
+    else nav('studentDashboard');
   }else{
     toast('✅ Account created — check your email to confirm, then log in.', 'ok');
     state.studentAuthMode = 'login';
@@ -413,7 +364,8 @@ async function signInStudent(email, password){
   await refreshProfile();
   studentDataStatus = 'idle';
   toast('👋 Logged in successfully', 'ok');
-  nav('studentDashboard');
+  if(postLoginRedirect){ const r = postLoginRedirect; postLoginRedirect = null; nav(r.view, r.extra); }
+  else nav('studentDashboard');
 }
 
 async function signUpTeacher(name, email, password){
@@ -501,15 +453,20 @@ async function ensureTeachers(force){
 async function ensureStudentData(force){
   if(!state.session || state.profile?.role!=='student') return;
   if(studentDataStatus==='ready' && !force) return;
+  const uid = state.session.user.id; // pin the user this request is for
   studentDataStatus = 'loading';
   try{
-    const uid = state.session.user.id;
     const [{data:enrollments, error:e1}, {data:payments, error:e2}, {data:reviews, error:e3}] = await Promise.all([
       sb.from('enrollments').select('*, teacher_profiles(profiles(full_name))').eq('student_id', uid).order('created_at',{ascending:false}),
       sb.from('payments').select('*').eq('student_id', uid).order('paid_at',{ascending:false}),
       sb.from('reviews').select('*').eq('student_id', uid),
     ]);
     if(e1) throw e1; if(e2) throw e2; if(e3) throw e3;
+    // If the signed-in user changed while this request was in flight (e.g.
+    // one student logged out and another logged in before the network
+    // response came back), these rows belong to the PREVIOUS user — throw
+    // them away instead of showing/merging them into the new user's view.
+    if(!state.session || state.session.user.id !== uid) return;
     myEnrollments = enrollments.map(e=>({
       id:e.id, teacherId:e.teacher_id, teacherName: e.teacher_profiles?.profiles?.full_name || 'Teacher',
       subject:e.subject, schedule:e.schedule, fee:e.fee, status:e.status, dueDate:e.due_date || '—',
@@ -518,6 +475,7 @@ async function ensureStudentData(force){
     myReviews = reviews;
     studentDataStatus = 'ready';
   }catch(err){
+    if(!state.session || state.session.user.id !== uid) return; // stale error, ignore
     console.error('Failed to load student dashboard data', err);
     studentDataStatus = 'error';
   }
@@ -527,25 +485,21 @@ async function ensureStudentData(force){
 async function ensureTeacherData(force){
   if(!state.session || state.profile?.role!=='teacher') return;
   if(teacherDataStatus==='ready' && !force) return;
+  const uid = state.session.user.id; // pin the user this request is for
   teacherDataStatus = 'loading';
   try{
-    const uid = state.session.user.id;
-    const [{data, error}, {data:enquiries, error:eqErr}] = await Promise.all([
-      sb.from('enrollments').select('*, profiles(full_name)').eq('teacher_id', uid).order('created_at',{ascending:false}),
-      sb.from('enquiries').select('*, profiles(full_name)').eq('teacher_id', uid).order('created_at',{ascending:false}),
-    ]);
+    const { data, error } = await sb.from('enrollments').select('*, profiles(full_name)').eq('teacher_id', uid).order('created_at',{ascending:false});
     if(error) throw error;
-    if(eqErr) throw eqErr;
+    // Same guard as ensureStudentData: discard results if the signed-in
+    // user changed while this request was in flight.
+    if(!state.session || state.session.user.id !== uid) return;
     myStudents = data.map(e=>({
       enrollmentId:e.id, studentId:e.student_id, name: e.profiles?.full_name || 'Student',
       grade:e.grade || '—', subject:e.subject, feeStatus:e.status, fee:e.fee, schedule:e.schedule,
     }));
-    myEnquiries = enquiries.map(q=>({
-      id:q.id, studentId:q.student_id, name: q.profiles?.full_name || 'A parent',
-      message:q.message, createdAt:q.created_at,
-    }));
     teacherDataStatus = 'ready';
   }catch(err){
+    if(!state.session || state.session.user.id !== uid) return;
     console.error('Failed to load teacher dashboard data', err);
     teacherDataStatus = 'error';
   }
@@ -594,7 +548,6 @@ function navbar(){
         <div style="display:flex; gap:10px; align-items:center;">
           <div class="pill ${c==='customer'?'active':''}" data-action="switch-portal" data-portal="customer">👪 Parents</div>
           <div class="pill ${c==='teacher'?'active':''}" data-action="switch-portal" data-portal="teacher">🍎 Teachers</div>
-          <button class="btn btn-ghost btn-sm" data-action="toggle-theme" title="Switch to ${currentTheme()==='dark'?'light':'dark'} theme" aria-label="Toggle theme">${currentTheme()==='dark' ? '☀️' : '🌙'}</button>
           ${loggedIn
             ? `<button class="btn btn-ghost btn-sm" data-action="logout">🚪 Log out</button>`
             : `<button class="btn btn-primary btn-sm" data-action="go" data-view="${c==='customer'?'studentAuth':'teacherAuth'}" data-mode="login">Log in</button>`}
@@ -834,7 +787,7 @@ function reviewsSectionBody(){
   if(!teacherReviews.length) return `<p class="muted" style="font-size:13.5px;">No reviews yet — be the first parent to leave one after a class.</p>`;
   return `<div style="display:flex; flex-direction:column; gap:14px;">
     ${teacherReviews.map(r=>`
-      <div style="padding-bottom:14px; border-bottom:1px solid var(--divider);">
+      <div style="padding-bottom:14px; border-bottom:1px solid rgba(255,255,255,0.06);">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <span style="font-weight:700; font-size:13.5px;">${r.profiles?.full_name || 'A parent'}</span>
           <span class="stars" style="font-size:12px;">${starString(r.rating)}</span>
@@ -926,7 +879,7 @@ function viewStudentDashboard(){
           <h3 style="font-size:16px; margin-bottom:16px;">Fee status</h3>
           ${myEnrollments.length ? `<div style="display:flex; flex-direction:column; gap:12px;">
             ${myEnrollments.map(e=>`
-            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; border-radius:12px; background:var(--divider-soft);">
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; border-radius:12px; background:rgba(255,255,255,0.03);">
               <div>
                 <div style="font-weight:600; font-size:13.5px;">${e.subject}</div>
                 <div class="muted" style="font-size:12px;">${e.teacherName}</div>
@@ -1010,14 +963,10 @@ function teacherSidebar(){
   const tabs = [
     {id:'overview', icon:'📊', label:'Overview'},
     {id:'students', icon:'👥', label:'Students'},
-    {id:'enquiries', icon:'✉️', label:'Enquiries', count: myEnquiries.length},
     {id:'profile', icon:'⚙️', label:'Profile'},
   ];
   return `<div class="glass" style="padding:14px;">
-    ${tabs.map(t=>`<div class="sidebar-link ${state.teacherTab===t.id?'active':''}" style="justify-content:space-between;" data-action="teacher-tab" data-tab="${t.id}">
-      <span>${t.icon} ${t.label}</span>
-      ${t.count ? `<span class="badge badge-blue" style="padding:2px 8px;">${t.count}</span>` : ''}
-    </div>`).join('')}
+    ${tabs.map(t=>`<div class="sidebar-link ${state.teacherTab===t.id?'active':''}" data-action="teacher-tab" data-tab="${t.id}">${t.icon} ${t.label}</div>`).join('')}
     <hr class="divider-dashed" style="margin:10px 0;">
     <div class="sidebar-link" data-action="logout">🚪 Log out</div>
   </div>`;
@@ -1026,10 +975,9 @@ function teacherSidebar(){
 function teacherOverview(){
   const pending = myStudents.filter(s=>s.feeStatus!=='paid').length;
   return `
-  <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:20px;" class="grid-2">
+  <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-bottom:20px;" class="grid-2">
     <div class="glass stat-card"><div class="eyebrow">Total students</div><div class="stat-num">${myStudents.length}</div></div>
     <div class="glass stat-card"><div class="eyebrow">Pending payments</div><div class="stat-num" style="color:var(--amber)">${pending}</div></div>
-    <div class="glass stat-card" style="cursor:pointer;" data-action="teacher-tab" data-tab="enquiries"><div class="eyebrow">Enquiries</div><div class="stat-num" style="color:var(--blue)">${myEnquiries.length}</div></div>
     <div class="glass stat-card"><div class="eyebrow">Rating</div><div class="stat-num">${state.selectedTeacherProfile?.rating ?? '—'}</div></div>
   </div>
   <div class="glass" style="padding:22px;">
@@ -1058,23 +1006,6 @@ function teacherStudents(){
         </tr>`).join('')}
       </tbody>
     </table>` : `<p class="muted" style="font-size:13.5px;">No students enrolled yet. Share your profile link so parents can find you.</p>`}
-  </div>`;
-}
-
-function teacherEnquiries(){
-  return `
-  <div class="glass" style="padding:22px;">
-    <h3 style="font-size:15.5px; margin-bottom:16px;">Enquiries from parents</h3>
-    ${myEnquiries.length ? `<div style="display:flex; flex-direction:column; gap:12px;">
-      ${myEnquiries.map(q=>`
-      <div class="glass" style="padding:16px;">
-        <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px;">
-          <div style="font-weight:700; font-size:14.5px;">${q.name}</div>
-          <div class="muted" style="font-size:12px; font-family:var(--mono); white-space:nowrap;">${new Date(q.createdAt).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'})}</div>
-        </div>
-        <p style="margin-top:8px; font-size:13.5px; line-height:1.6;" class="muted">${q.message}</p>
-      </div>`).join('')}
-    </div>` : `<p class="muted" style="font-size:13.5px;">No enquiries yet. Share your profile link so parents can reach out.</p>`}
   </div>`;
 }
 
@@ -1111,7 +1042,7 @@ function viewTeacherDashboard(){
   if(teacherDataStatus!=='ready'){
     return `${navbar()}${teacherDataStatus==='error' ? errorScreen('dashboard') : loadingScreen('your dashboard')}`;
   }
-  const tabMap = {overview:teacherOverview, students:teacherStudents, enquiries:teacherEnquiries, profile:teacherProfileEdit};
+  const tabMap = {overview:teacherOverview, students:teacherStudents, profile:teacherProfileEdit};
   return `
   ${navbar()}
   <div class="wrap view-transition" style="padding-top:32px;">
@@ -1270,7 +1201,10 @@ document.addEventListener('click', (e)=>{
       nav('teacherProfile', {selectedTeacherId: el.dataset.id});
       break;
     case 'open-enquiry':
-      if(!state.session || state.profile?.role!=='student'){ toast('Please log in as a parent/student first', 'warn'); nav('studentAuth'); return; }
+      if(!state.session || state.profile?.role!=='student'){
+        postLoginRedirect = { view:'teacherProfile', extra:{selectedTeacherId: el.dataset.id} };
+        toast('Please log in as a parent/student first', 'warn'); nav('studentAuth'); return;
+      }
       openModal(enquiryModal(el.dataset.id));
       break;
     case 'close-modal':
@@ -1292,11 +1226,17 @@ document.addEventListener('click', (e)=>{
     }
     case 'enroll-now': {
       const t = TEACHERS.find(x=>x.id===el.dataset.id);
-      if(!state.session || state.profile?.role!=='student'){ toast('Please log in as a parent/student first', 'warn'); nav('studentAuth'); return; }
-      sb.from('enrollments').insert({
+      if(!state.session || state.profile?.role!=='student'){
+        postLoginRedirect = { view:'teacherProfile', extra:{selectedTeacherId: el.dataset.id} };
+        toast('Please log in as a parent/student first', 'warn'); nav('studentAuth'); return;
+      }
+      if(enrollInFlight) return; // ignore a double-click while the first request is still saving
+      enrollInFlight = true;
+      sb.from('enrollments').upsert({
         student_id: state.session.user.id, teacher_id: t.id, subject: t.subjects[0]||'General',
         schedule: (t.schedule[0] ? `${t.schedule[0].day} ${t.schedule[0].time}` : ''), fee: t.feeStart, status:'due',
-      }).then(({error})=>{
+      }, { onConflict: 'student_id,teacher_id,subject', ignoreDuplicates: true }).then(({error})=>{
+        enrollInFlight = false;
         if(error){ toast('❌ ' + error.message, 'err'); return; }
         toast('✅ Enrolled with ' + t.name + '!', 'ok');
         studentDataStatus = 'idle';
@@ -1322,9 +1262,6 @@ document.addEventListener('click', (e)=>{
       break;
     case 'logout':
       logout();
-      break;
-    case 'toggle-theme':
-      toggleTheme();
       break;
     case 'teacher-tab':
       state.teacherTab = el.dataset.tab;
