@@ -531,21 +531,26 @@ async function signUpTeacher(name, email, password){
   if(password.length < 6) return toast('Password must be at least 6 characters', 'warn');
   const { data, error } = await sb.auth.signUp({ email, password, options:{ data:{ full_name:name, role:'teacher' } } });
   if(error) return toast('❌ ' + error.message, 'err');
+  let freshTeacherProfile = null;
   if(data.user){
     await sb.from('profiles').insert({ id:data.user.id, role:'teacher', full_name:name });
-    await sb.from('teacher_profiles').insert({
+    freshTeacherProfile = {
       profile_id:data.user.id, initials: name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase(),
       color: AVATAR_COLORS[Math.floor(Math.random()*AVATAR_COLORS.length)], category:'academics',
       subjects:[], location:'', lat:null, lng:null, fee_start:0, fee_unit:'/month', experience:'', bio:'',
-    });
+    };
+    await sb.from('teacher_profiles').insert(freshTeacherProfile);
   }
   if(data.session){
     state.session = data.session;
     lastAuthUserId = data.session.user.id;
     await refreshProfile();
     teacherDataStatus = 'idle';
-    toast('🎉 Teacher account created — fill in your profile so students can find you.', 'ok');
-    nav('teacherDashboard');
+    // A brand-new teacher has no listing details yet — send them straight
+    // into a one-time onboarding panel instead of the (still-empty) dashboard.
+    state.selectedTeacherProfile = { ...freshTeacherProfile, schedule_slots: [] };
+    toast('🎉 Teacher account created — let\'s fill in your profile.', 'ok');
+    nav('teacherOnboarding');
   }else{
     toast('✅ Account created — check your email to confirm, then log in.', 'ok');
     state.teacherAuthMode = 'login';
@@ -1245,6 +1250,62 @@ Wed | 4:00–5:00 PM | Mathematics">${(t.schedule_slots||[]).map(s=>`${s.day} | 
   </div>`;
 }
 
+// One-time panel shown immediately after a teacher signs up. It asks for
+// the exact same details as the "Profile" tab in the dashboard (same field
+// IDs, so it can reuse the dashboard's save/location logic), but is its
+// own view — the Profile tab itself is untouched, and teachers can always
+// come back and edit these same details there later.
+function teacherOnboardingFields(){
+  const t = state.selectedTeacherProfile || {};
+  return `
+    <div class="field"><label class="field-label">Category</label>
+      <select class="input" id="peCategory">
+        ${CATS.map(c=>`<option value="${c.id}" ${t.category===c.id?'selected':''}>${c.icon} ${c.label}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label class="field-label">Subjects (comma separated)</label><input class="input" id="peSubjects" value="${(t.subjects||[]).join(', ')}" placeholder="Mathematics, Physics"/></div>
+    <div class="field"><label class="field-label">Location</label><input class="input" id="peLocation" value="${t.location||''}" placeholder="Sector 45, Gurugram"/></div>
+    <div class="field"><label class="field-label">Google Maps link (optional)</label><input class="input" id="peMapsLink" value="${t.maps_link||''}" placeholder="https://maps.app.goo.gl/..."/>
+      <p class="muted" style="font-size:12px; margin-top:6px;">Open Google Maps, find your place, tap Share, and paste the link here. Students will see it as a button on your profile.</p>
+    </div>
+    <div class="field">
+      <label class="field-label">Teaching location (for automatic distance)</label>
+      <input type="hidden" id="peLat" value="${t.lat ?? ''}"/>
+      <input type="hidden" id="peLng" value="${t.lng ?? ''}"/>
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <button type="button" class="btn btn-ghost btn-sm" data-action="teacher-set-location" ${state.locatingMe?'disabled':''}>${state.locatingMe?'Locating…':'📍 Use my current location'}</button>
+        <span class="muted" style="font-size:12.5px;" id="peLocStatus">${(t.lat!=null && t.lng!=null) ? 'Location set — students will see their distance to you' : 'Not set yet — students won\'t see a distance until you set this'}</span>
+      </div>
+      <p class="muted" style="font-size:12px; margin-top:6px;">Stand at (or near) where you teach and tap the button — this replaces typing in a distance by hand, since it's calculated live from each student's own location.</p>
+    </div>
+    <div class="field"><label class="field-label">Experience</label><input class="input" id="peExperience" value="${t.experience||''}" placeholder="8 yrs"/></div>
+    <div class="field"><label class="field-label">Monthly fee (₹)</label><input class="input" id="peFee" type="number" value="${t.fee_start||0}"/></div>
+    <div class="field"><label class="field-label">Bio</label><textarea class="input" id="peBio" rows="3" placeholder="Tell parents about your teaching style...">${t.bio||''}</textarea></div>
+    <div class="field">
+      <label class="field-label">Weekly schedule — one slot per line, as <code>Day | Time | Subject</code></label>
+      <textarea class="input" id="peSchedule" rows="3" placeholder="Mon | 4:00–5:00 PM | Mathematics
+Wed | 4:00–5:00 PM | Mathematics">${(t.schedule_slots||[]).map(s=>`${s.day} | ${s.time} | ${s.subj}`).join('\n')}</textarea>
+    </div>`;
+}
+
+function viewTeacherOnboarding(){
+  if(!state.session || state.profile?.role!=='teacher') return viewTeacherAuth();
+  return `
+  ${navbar()}
+  <div class="wrap view-transition" style="padding-top:32px; padding-bottom:60px;">
+    <div class="glass" style="padding:30px; max-width:560px; margin:0 auto;">
+      <div class="eyebrow">Step 2 of 2</div>
+      <h1 style="font-size:24px; margin:6px 0 6px;">Set up your teacher profile</h1>
+      <p class="muted" style="font-size:13.5px; margin-bottom:22px;">This is what parents and students will see. You can always come back and change it later from your dashboard.</p>
+      ${teacherOnboardingFields()}
+      <div style="display:flex; align-items:center; gap:16px; margin-top:8px; flex-wrap:wrap;">
+        <button class="btn btn-primary" data-action="save-profile-onboarding">Save &amp; continue to dashboard</button>
+        <a href="#" style="color:var(--muted); font-size:13px;" data-action="skip-onboarding">Skip for now →</a>
+      </div>
+    </div>
+  </div>`;
+}
+
 function viewTeacherDashboard(){
   if(!state.session || state.profile?.role!=='teacher') return viewTeacherAuth();
   if(teacherDataStatus!=='ready'){
@@ -1377,6 +1438,7 @@ function render(){
     home: viewHome, browse: viewBrowse, teacherProfile: viewTeacherProfile,
     studentAuth: viewStudentAuth, studentDashboard: viewStudentDashboard,
     teacherHome: viewTeacherHome, teacherAuth: viewTeacherAuth, teacherDashboard: viewTeacherDashboard,
+    teacherOnboarding: viewTeacherOnboarding,
   };
   let html;
   if(NEEDS_TEACHERS.has(state.view) && teachersStatus !== 'ready'){
@@ -1504,6 +1566,12 @@ document.addEventListener('click', (e)=>{
     case 'save-profile':
       saveTeacherProfile();
       break;
+    case 'save-profile-onboarding':
+      saveTeacherProfileOnboarding();
+      break;
+    case 'skip-onboarding':
+      nav('teacherDashboard');
+      break;
     case 'use-my-location':
       useMyLocation();
       break;
@@ -1615,6 +1683,39 @@ async function saveTeacherProfile(){
   toast('✅ Profile updated', 'ok');
   ensureTeachers(true);
   loadOwnTeacherProfile();
+}
+
+// Same save logic as saveTeacherProfile(), reading the same field IDs from
+// the onboarding panel — kept separate so the dashboard's Profile tab and
+// its save button are never touched, and so this can move on to the
+// dashboard afterward instead of staying on the same screen.
+async function saveTeacherProfileOnboarding(){
+  const uid = state.session.user.id;
+  const payload = {
+    category: document.getElementById('peCategory').value,
+    subjects: document.getElementById('peSubjects').value.split(',').map(s=>s.trim()).filter(Boolean),
+    location: document.getElementById('peLocation').value,
+    maps_link: document.getElementById('peMapsLink').value.trim(),
+    lat: document.getElementById('peLat').value ? parseFloat(document.getElementById('peLat').value) : null,
+    lng: document.getElementById('peLng').value ? parseFloat(document.getElementById('peLng').value) : null,
+    experience: document.getElementById('peExperience').value,
+    fee_start: parseInt(document.getElementById('peFee').value) || 0,
+    bio: document.getElementById('peBio').value,
+  };
+  const { error } = await sb.from('teacher_profiles').update(payload).eq('profile_id', uid);
+  if(error){ toast('❌ ' + error.message, 'err'); return; }
+
+  const scheduleLines = document.getElementById('peSchedule').value.split('\n').map(l=>l.trim()).filter(Boolean);
+  const slots = scheduleLines.map(l=>{
+    const [day,time,subj] = l.split('|').map(s=>s.trim());
+    return { teacher_id: uid, day, time, subj };
+  }).filter(s=>s.day && s.time && s.subj);
+  await sb.from('schedule_slots').delete().eq('teacher_id', uid);
+  if(slots.length) await sb.from('schedule_slots').insert(slots);
+
+  toast('🎉 Profile saved — welcome to your dashboard!', 'ok');
+  ensureTeachers(true);
+  nav('teacherDashboard');
 }
 
 async function confirmPay(method){
