@@ -272,12 +272,13 @@ const state = {
   session: null,       // supabase auth session, or null
   profile: null,        // row from `profiles` table for the signed-in user
   selectedTeacherId: null,
-  filters: { category:'all', query:'', minRating:0, maxFee:3000 },
+  filters: { category:'all', query:'', sortDistance:false },
   teacherTab: 'overview',
   studentAuthMode: 'login',   // 'login' | 'signup'
   teacherAuthMode: 'login',
   myLocation: null,      // { lat, lng } for the person browsing — used to auto-calc distance to each teacher
   locatingMe: false,     // true while a geolocation request is in flight
+  postLoginRedirect: null,   // { view, selectedTeacherId } — where to send the user back to after they log in mid-action
 };
 try{
   var savedLoc = localStorage.getItem('npt-my-location');
@@ -294,11 +295,18 @@ function haversineKm(lat1, lng1, lat2, lng2){
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
+// Raw distance in km from the browsing person to a teacher, or null if
+// either side's coordinates aren't known yet. Used for sorting.
+function distanceKmToTeacher(t){
+  if(!state.myLocation || t.lat==null || t.lng==null) return null;
+  return haversineKm(state.myLocation.lat, state.myLocation.lng, t.lat, t.lng);
+}
+
 // Formatted distance from the browsing person to a teacher, or null if
 // either side's coordinates aren't known yet. Always expressed in km.
 function distanceToTeacher(t){
-  if(!state.myLocation || t.lat==null || t.lng==null) return null;
-  const km = haversineKm(state.myLocation.lat, state.myLocation.lng, t.lat, t.lng);
+  const km = distanceKmToTeacher(t);
+  if(km==null) return null;
   return (km < 0.1 ? '<0.1' : km.toFixed(1)) + ' km away';
 }
 
@@ -398,11 +406,27 @@ function starString(rating){
   const full = Math.round(rating||0);
   return '★'.repeat(full) + '☆'.repeat(5-full);
 }
+// Maps a 1–5 rating to a color along a red → amber → green gradient, so
+// low ratings read as a warning and high ratings read as a strong
+// positive, with a smooth blend in between. 0/no rating stays neutral.
+function ratingColor(rating){
+  if(!rating) return 'var(--text-dimmer)';
+  const clamped = Math.max(1, Math.min(5, rating));
+  const hue = (clamped - 1) / 4 * 120; // 1★=0 (red) … 5★=120 (green)
+  return `hsl(${hue.toFixed(0)}, 72%, 50%)`;
+}
+// Translucent background version of ratingColor(), for badge fills.
+function ratingColorBg(rating){
+  if(!rating) return 'transparent';
+  const clamped = Math.max(1, Math.min(5, rating));
+  const hue = (clamped - 1) / 4 * 120;
+  return `hsla(${hue.toFixed(0)}, 72%, 50%, 0.15)`;
+}
 // Small inline badge for teacher cards — shows "New" instead of a fake
 // star rating for teachers who don't have any reviews yet.
 function ratingBadgeSmall(t){
   if(!t.reviews) return `<div class="badge badge-blue">🆕 New</div>`;
-  return `<div class="badge badge-amber">${starString(t.rating)[0]} ${t.rating}</div>`;
+  return `<div class="badge" style="background:${ratingColorBg(t.rating)}; color:${ratingColor(t.rating)};">${starString(t.rating)[0]} ${t.rating}</div>`;
 }
 
 /* =========================================================
@@ -472,7 +496,7 @@ async function signUpStudent(name, email, password){
     await refreshProfile();
     studentDataStatus = 'idle';
     toast('🎉 Account created!', 'ok');
-    nav('studentDashboard');
+    goPostLogin();
   }else{
     toast('✅ Account created — check your email to confirm, then log in.', 'ok');
     state.studentAuthMode = 'login';
@@ -489,6 +513,16 @@ async function signInStudent(email, password){
   await refreshProfile();
   studentDataStatus = 'idle';
   toast('👋 Logged in successfully', 'ok');
+  goPostLogin();
+}
+
+// After a student logs in or signs up, send them back to whatever they
+// were doing (e.g. enrolling with a teacher) instead of always landing
+// on the dashboard.
+function goPostLogin(){
+  const redirect = state.postLoginRedirect;
+  state.postLoginRedirect = null;
+  if(redirect){ nav(redirect.view, redirect); return; }
   nav('studentDashboard');
 }
 
@@ -773,13 +807,23 @@ function teacherCard(t){
 ========================================================= */
 function filteredTeachers(){
   const f = state.filters;
-  return TEACHERS.filter(t=>{
+  const list = TEACHERS.filter(t=>{
     if(f.category!=='all' && t.category!==f.category) return false;
     if(f.query && !(t.name.toLowerCase().includes(f.query.toLowerCase()) || t.subjects.join(' ').toLowerCase().includes(f.query.toLowerCase()))) return false;
-    if(t.rating < f.minRating) return false;
-    if(t.feeStart > f.maxFee) return false;
     return true;
   });
+  if(f.sortDistance && state.myLocation){
+    // Nearest to farthest. Teachers without saved coordinates have no
+    // known distance, so they're pushed to the end rather than dropped.
+    list.sort((a,b)=>{
+      const da = distanceKmToTeacher(a), db = distanceKmToTeacher(b);
+      if(da==null && db==null) return 0;
+      if(da==null) return 1;
+      if(db==null) return -1;
+      return da - db;
+    });
+  }
+  return list;
 }
 
 function viewBrowse(){
@@ -816,12 +860,13 @@ function viewBrowse(){
             </div>
           </div>
           <div class="field">
-            <label class="field-label">Minimum rating: ${state.filters.minRating.toFixed(1)}+</label>
-            <input type="range" min="0" max="5" step="0.5" value="${state.filters.minRating}" style="width:100%;" oninput="state.filters.minRating=parseFloat(this.value); renderList(); this.previousElementSibling.textContent='Minimum rating: '+parseFloat(this.value).toFixed(1)+'+'">
-          </div>
-          <div class="field">
-            <label class="field-label">Max fee: ₹${state.filters.maxFee}/mo</label>
-            <input type="range" min="0" max="3000" step="100" value="${state.filters.maxFee}" style="width:100%;" oninput="state.filters.maxFee=parseInt(this.value); renderList(); this.previousElementSibling.textContent='Max fee: ₹'+this.value+'/mo'">
+            <label class="field-label">Sort</label>
+            ${state.myLocation ? `
+              <div class="pill ${state.filters.sortDistance?'active':''}" style="display:inline-flex;" data-action="toggle-sort-distance">📍 Nearest to farthest</div>
+            ` : `
+              <p class="muted" style="font-size:12.5px; margin-bottom:8px;">Share your location to sort teachers by distance.</p>
+              <button class="btn btn-primary btn-sm" data-action="use-my-location" ${state.locatingMe?'disabled':''}>${state.locatingMe?'Locating…':'📍 Use my location'}</button>
+            `}
           </div>
         </div>
       </div>
@@ -854,8 +899,8 @@ function viewTeacherProfile(){
               <div class="muted" style="font-size:13.5px; margin-top:4px;">${cat.icon} ${t.subjects.join(' · ') || 'No subjects listed'} &nbsp;·&nbsp; ${t.experience} experience</div>
               <div style="display:flex; align-items:center; gap:10px; margin-top:8px;">
                 ${t.reviews ? `
-                  <span class="stars">${starString(t.rating)}</span>
-                  <span style="font-weight:700; font-size:14px;">${t.rating}</span>
+                  <span class="stars" style="color:${ratingColor(t.rating)};">${starString(t.rating)}</span>
+                  <span style="font-weight:700; font-size:14px; color:${ratingColor(t.rating)};">${t.rating}</span>
                   <span class="muted" style="font-size:13px;">(${t.reviews} review${t.reviews!==1?'s':''})</span>
                 ` : `<span class="badge badge-blue">🆕 New — no reviews yet</span>`}
               </div>
@@ -922,7 +967,7 @@ function reviewsSectionBody(){
       <div style="padding-bottom:14px; border-bottom:1px solid var(--divider);">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <span style="font-weight:700; font-size:13.5px;">${r.profiles?.full_name || 'A parent'}</span>
-          <span class="stars" style="font-size:12px;">${starString(r.rating)}</span>
+          <span class="stars" style="font-size:12px; color:${ratingColor(r.rating)};">${starString(r.rating)}</span>
         </div>
         ${r.comment ? `<p class="muted" style="font-size:13px; margin-top:6px; line-height:1.6;">${r.comment}</p>` : ''}
       </div>`).join('')}
@@ -1371,6 +1416,10 @@ document.addEventListener('click', (e)=>{
       state.filters.category = el.dataset.cat;
       render();
       break;
+    case 'toggle-sort-distance':
+      state.filters.sortDistance = !state.filters.sortDistance;
+      render();
+      break;
     case 'search-from-hero':
       state.filters.query = document.getElementById('heroSearch').value;
       nav('browse');
@@ -1401,7 +1450,14 @@ document.addEventListener('click', (e)=>{
     }
     case 'enroll-now': {
       const t = TEACHERS.find(x=>x.id===el.dataset.id);
-      if(!state.session || state.profile?.role!=='student'){ toast('Please log in as a parent/student first', 'warn'); nav('studentAuth'); return; }
+      if(!state.session || state.profile?.role!=='student'){
+        // Remember where they were trying to enroll so we can send them
+        // straight back here once they've logged in.
+        state.postLoginRedirect = { view:'teacherProfile', selectedTeacherId: t.id };
+        toast('Please log in as a parent/student first', 'warn');
+        nav('studentAuth');
+        return;
+      }
       sb.from('enrollments').insert({
         student_id: state.session.user.id, teacher_id: t.id, subject: t.subjects[0]||'General',
         schedule: (t.schedule[0] ? `${t.schedule[0].day} ${t.schedule[0].time}` : ''), fee: t.feeStart, status:'due',
