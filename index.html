@@ -187,6 +187,14 @@ h1,h2,h3,h4{ font-family: var(--display); font-weight:600; letter-spacing:-0.01e
 .btn-ghost:hover{ background: var(--glass-hi); transform: translateY(-2px); }
 .btn-sm{ padding:9px 16px; font-size:13px; }
 .btn-block{ width:100%; }
+.btn-loading{ position:relative; pointer-events:none; color:transparent !important; }
+.btn-loading .btn-spinner{
+  position:absolute; top:50%; left:50%; width:16px; height:16px; margin:-8px 0 0 -8px;
+  border-radius:50%; border:2px solid rgba(255,255,255,0.4); border-top-color:#fff;
+  animation: btn-spin .7s linear infinite;
+}
+.btn-ghost.btn-loading .btn-spinner{ border-color: rgba(120,120,140,0.35); border-top-color: var(--text); }
+@keyframes btn-spin{ to{ transform: rotate(360deg); } }
 .pill{ display:inline-flex; align-items:center; gap:6px; padding:7px 14px; border-radius:100px; font-size:13px; font-weight:600; border:1px solid var(--glass-border); background:var(--glass); cursor:pointer; transition: all .2s ease; white-space:nowrap;}
 .pill:hover{ background: var(--glass-hi); transform: translateY(-1px); }
 .pill.active{ background: linear-gradient(135deg, var(--primary), var(--primary2)); border-color:transparent; color:#fff; }
@@ -352,6 +360,7 @@ const state = {
   session: null,       // supabase auth session, or null
   profile: null,        // row from `profiles` table for the signed-in user
   selectedTeacherId: null,
+  selectedTeacherFrom: 'home',  // 'home' | 'browse' — which page the teacher profile was opened from, for the back button
   filters: { category:'all', query:'', sortDistance:false },
   teacherTab: 'overview',
   studentAuthMode: 'login',   // 'login' | 'signup'
@@ -529,6 +538,29 @@ function toast(msg, type){
   setTimeout(()=>{ el.style.transition='opacity .4s ease, transform .4s ease'; el.style.opacity='0'; el.style.transform='translateX(40px)'; setTimeout(()=>el.remove(),400); }, 3200);
 }
 
+// Puts a button into/out of a spinning "buffering" state while an async
+// auth call is in flight, so there's no awkward static gap before the
+// next screen appears. Safe to call even if the view has already been
+// re-rendered out from under the original button (e.g. after a
+// successful login swaps the whole page) — the .finally() just no-ops
+// on a detached element.
+function setBtnLoading(btn, loading){
+  if(!btn) return;
+  if(loading){
+    if(btn.querySelector('.btn-spinner')) return; // already loading
+    btn.classList.add('btn-loading');
+    btn.disabled = true;
+    const spin = document.createElement('span');
+    spin.className = 'btn-spinner';
+    btn.appendChild(spin);
+  }else{
+    btn.classList.remove('btn-loading');
+    btn.disabled = false;
+    const spin = btn.querySelector('.btn-spinner');
+    if(spin) spin.remove();
+  }
+}
+
 function starString(rating){
   const full = Math.round(rating||0);
   return '★'.repeat(full) + '☆'.repeat(5-full);
@@ -607,7 +639,7 @@ async function boot(){
   // support ?teacher=<id> deep links (e.g. shared from a teacher's dashboard)
   const params = new URLSearchParams(location.search);
   const sharedTeacher = params.get('teacher');
-  if(sharedTeacher){ state.view = 'teacherProfile'; state.selectedTeacherId = sharedTeacher; }
+  if(sharedTeacher){ state.view = 'teacherProfile'; state.selectedTeacherId = sharedTeacher; state.selectedTeacherFrom = 'home'; }
 
   ensureTeachers();
   render();
@@ -1109,7 +1141,7 @@ function viewTeacherProfile(){
   return `
   ${navbar()}
   <div class="wrap view-transition" style="padding-top:32px;">
-    <button class="btn btn-ghost btn-sm" data-action="go" data-view="browse" style="margin-bottom:20px;">← Back to search</button>
+    <button class="btn btn-ghost btn-sm" data-action="go" data-view="${state.selectedTeacherFrom==='browse'?'browse':'home'}" style="margin-bottom:20px;">← Back to ${state.selectedTeacherFrom==='browse'?'search':'home'}</button>
     <div class="grid-2">
       <div>
         <div class="glass" style="padding:28px;">
@@ -1745,7 +1777,8 @@ document.addEventListener('click', (e)=>{
       nav(state.session && state.profile?.role==='admin' ? 'adminDashboard' : 'adminAuth');
       break;
     case 'login-admin':
-      signInAdmin(document.getElementById('adUsername').value, document.getElementById('adPassword').value);
+      setBtnLoading(el, true);
+      signInAdmin(document.getElementById('adUsername').value, document.getElementById('adPassword').value).finally(()=>setBtnLoading(el, false));
       break;
     case 'admin-tab':
       state.adminTab = el.dataset.tab;
@@ -1794,7 +1827,7 @@ document.addEventListener('click', (e)=>{
       nav('browse');
       break;
     case 'view-teacher':
-      nav('teacherProfile', {selectedTeacherId: el.dataset.id});
+      nav('teacherProfile', {selectedTeacherId: el.dataset.id, selectedTeacherFrom: state.view==='browse' ? 'browse' : 'home'});
       break;
     case 'open-enquiry':
       if(!state.session || state.profile?.role!=='student'){ toast('Please log in as a parent/student first', 'warn'); nav('studentAuth'); return; }
@@ -1843,16 +1876,20 @@ document.addEventListener('click', (e)=>{
     case 'teacher-auth-mode':
       state.teacherAuthMode = el.dataset.mode; render(); break;
     case 'login-student':
-      signInStudent(document.getElementById('suEmail').value, document.getElementById('suPassword').value);
+      setBtnLoading(el, true);
+      signInStudent(document.getElementById('suEmail').value, document.getElementById('suPassword').value).finally(()=>setBtnLoading(el, false));
       break;
     case 'signup-student':
-      signUpStudent(document.getElementById('suName').value, document.getElementById('suEmail').value, document.getElementById('suPassword').value);
+      setBtnLoading(el, true);
+      signUpStudent(document.getElementById('suName').value, document.getElementById('suEmail').value, document.getElementById('suPassword').value).finally(()=>setBtnLoading(el, false));
       break;
     case 'login-teacher':
-      signInTeacher(document.getElementById('tuEmail').value, document.getElementById('tuPassword').value);
+      setBtnLoading(el, true);
+      signInTeacher(document.getElementById('tuEmail').value, document.getElementById('tuPassword').value).finally(()=>setBtnLoading(el, false));
       break;
     case 'signup-teacher':
-      signUpTeacher(document.getElementById('tuName').value, document.getElementById('tuEmail').value, document.getElementById('tuPassword').value);
+      setBtnLoading(el, true);
+      signUpTeacher(document.getElementById('tuName').value, document.getElementById('tuEmail').value, document.getElementById('tuPassword').value).finally(()=>setBtnLoading(el, false));
       break;
     case 'logout':
       logout();
