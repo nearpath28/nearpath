@@ -59,6 +59,80 @@
 }
 *{box-sizing:border-box; margin:0; padding:0;}
 html{scroll-behavior:smooth;}
+
+/* ---------------------------------------------------------------
+   Theme toggle — liquid-glass circular reveal.
+   When the browser supports the View Transitions API, toggleTheme()
+   calls document.startViewTransition() with --theme-toggle-x/y/radius
+   set to the clicked button's position. That gives us a snapshot of the
+   old theme and a snapshot of the new theme stacked on top of each
+   other; this keyframe clips the new one to an expanding circle
+   centered on the button. Pairing the clip with a fading blur keeps the
+   edge soft and a little translucent instead of a hard line, like the
+   new theme is condensing into view rather than being cut in. A small
+   glassy ripple (below) blooms from the button itself in sync, so the
+   motion visibly originates right beside where you clicked. Browsers
+   without support (or people with reduced-motion on) just get an
+   instant swap — see the JS fallback in toggleTheme().
+--------------------------------------------------------------- */
+@media (prefers-reduced-motion: no-preference){
+  ::view-transition-old(root),
+  ::view-transition-new(root){
+    animation: none;
+    mix-blend-mode: normal;
+  }
+  ::view-transition-old(root){ z-index: 1; }
+  ::view-transition-new(root){
+    z-index: 2;
+    animation: theme-reveal 850ms cubic-bezier(0.22,0.61,0.36,1);
+    transform-origin: var(--theme-toggle-x, 50%) var(--theme-toggle-y, 50%);
+  }
+  @keyframes theme-reveal{
+    0%{
+      clip-path: circle(0px at var(--theme-toggle-x, 50%) var(--theme-toggle-y, 50%));
+      filter: blur(22px) saturate(1.4) brightness(1.15);
+      opacity: 0.55;
+    }
+    55%{
+      filter: blur(9px) saturate(1.15) brightness(1.05);
+      opacity: 0.9;
+    }
+    100%{
+      clip-path: circle(var(--theme-toggle-radius, 150%) at var(--theme-toggle-x, 50%) var(--theme-toggle-y, 50%));
+      filter: blur(0px) saturate(1) brightness(1);
+      opacity: 1;
+    }
+  }
+
+  /* The little glass bloom that spawns right at the button on click —
+     see spawnThemeRipple() in the JS. Pure decoration, layered above
+     everything, removed automatically once its animation finishes. */
+  .theme-ripple{
+    position: fixed;
+    top: 0; left: 0;
+    width: 44px; height: 44px;
+    margin: -22px 0 0 -22px;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 99999;
+    background:
+      radial-gradient(circle at 32% 28%, rgba(255,255,255,0.6), rgba(255,255,255,0.05) 40%, transparent 65%),
+      radial-gradient(circle, var(--primary) 0%, var(--primary2) 55%, transparent 78%);
+    border: 1px solid rgba(255,255,255,0.4);
+    box-shadow: 0 0 50px 12px rgba(108,92,231,0.4), inset 0 0 24px rgba(255,255,255,0.3);
+    backdrop-filter: blur(3px) saturate(180%);
+    -webkit-backdrop-filter: blur(3px) saturate(180%);
+    animation: theme-ripple-pop 950ms cubic-bezier(0.22,0.61,0.36,1) forwards;
+  }
+  @keyframes theme-ripple-pop{
+    0%{ transform: scale(0); opacity: 0; filter: blur(0px) saturate(180%); }
+    14%{ opacity: 0.95; }
+    55%{ opacity: 0.55; filter: blur(2px) saturate(180%); }
+    100%{ transform: scale(var(--theme-ripple-scale, 40)); opacity: 0; filter: blur(10px) saturate(180%); }
+  }
+}
+
+
 body{
   font-family: var(--body);
   background: var(--bg);
@@ -395,11 +469,52 @@ function nav(view, extra){
 }
 
 function currentTheme(){ return document.documentElement.getAttribute('data-theme') || 'dark'; }
-function toggleTheme(){
+
+// A small glassy bloom that spawns centered on (x, y) and grows/fades on
+// its own CSS animation (theme-ripple-pop), then removes itself. Pure
+// visual flourish — independent of whether the page-wide reveal runs.
+function spawnThemeRipple(x, y){
+  const ripple = document.createElement('div');
+  ripple.className = 'theme-ripple';
+  ripple.style.left = x + 'px';
+  ripple.style.top = y + 'px';
+  // Scale so the 44px bloom comfortably outgrows the farthest screen
+  // corner from the click point by the time its animation finishes.
+  const targetRadius = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+  ripple.style.setProperty('--theme-ripple-scale', (targetRadius / 22).toFixed(2));
+  document.body.appendChild(ripple);
+  ripple.addEventListener('animationend', () => ripple.remove(), { once: true });
+  setTimeout(() => ripple.remove(), 1200); // safety net if animationend never fires
+}
+
+function toggleTheme(btn){
   const next = currentTheme()==='dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', next);
-  try{ localStorage.setItem('npt-theme', next); }catch(e){}
-  render(); // re-render so the toggle button's icon/label stays in sync
+  const applyTheme = () => {
+    document.documentElement.setAttribute('data-theme', next);
+    try{ localStorage.setItem('npt-theme', next); }catch(e){}
+    render(); // re-render so the toggle button's icon/label stays in sync
+  };
+
+  const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const rect = btn && btn.getBoundingClientRect ? btn.getBoundingClientRect() : null;
+  const x = rect ? rect.left + rect.width / 2 : innerWidth / 2;
+  const y = rect ? rect.top + rect.height / 2 : innerHeight / 2;
+
+  if(!reduceMotion && rect) spawnThemeRipple(x, y);
+
+  const canAnimate = document.startViewTransition && rect && !reduceMotion;
+  if(!canAnimate){ applyTheme(); return; }
+
+  // Expand the reveal circle from the button's own position, out to
+  // whichever corner of the screen is farthest away, so it always fully
+  // covers the page no matter where the button sits.
+  const radius = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+  const root = document.documentElement.style;
+  root.setProperty('--theme-toggle-x', x + 'px');
+  root.setProperty('--theme-toggle-y', y + 'px');
+  root.setProperty('--theme-toggle-radius', radius + 'px');
+
+  document.startViewTransition(applyTheme);
 }
 
 function toast(msg, type){
@@ -1337,7 +1452,6 @@ function teacherProfileEdit(){
         <button type="button" class="btn btn-ghost btn-sm" data-action="teacher-set-location" ${state.locatingMe?'disabled':''}>${state.locatingMe?'Locating…':'📍 Use my current location'}</button>
         <span class="muted" style="font-size:12.5px;" id="peLocStatus">${(t.lat!=null && t.lng!=null) ? 'Location set — students will see their distance to you' : 'Not set yet — students won\'t see a distance until you set this'}</span>
       </div>
-      <p class="muted" style="font-size:12px; margin-top:6px;">Stand at (or near) where you teach and tap the button — this replaces typing in a distance by hand, since it's calculated live from each student's own location.</p>
     </div>
     <div class="field"><label class="field-label">Experience</label><input class="input" id="peExperience" value="${t.experience||''}" placeholder="8 yrs"/></div>
     <div class="field"><label class="field-label">Monthly fee (₹)</label><input class="input" id="peFee" type="number" value="${t.fee_start||0}"/></div>
@@ -1744,7 +1858,7 @@ document.addEventListener('click', (e)=>{
       logout();
       break;
     case 'toggle-theme':
-      toggleTheme();
+      toggleTheme(el);
       break;
     case 'teacher-tab':
       state.teacherTab = el.dataset.tab;
