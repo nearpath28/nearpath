@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>NearPath Tutors — Find the right teacher, close to home</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%236C5CE7'/%3E%3Cstop offset='100%25' stop-color='%23EC4899'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' rx='24' fill='url(%23g)'/%3E%3Cpath d='M50 30 L34 40 L50 50 L66 40 Z' fill='%23fff'/%3E%3Cpath d='M40 43 L40 58 Q40 66 50 66 Q60 66 60 58 L60 43 L50 49 Z' fill='%23fff' opacity='0.92'/%3E%3Cline x1='66' y1='40' x2='66' y2='56' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3Ccircle cx='66' cy='59' r='3.4' fill='%23fff'/%3E%3C/svg%3E" />
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
@@ -367,7 +368,7 @@ const state = {
   teacherAuthMode: 'login',
   myLocation: null,      // { lat, lng } for the person browsing — used to auto-calc distance to each teacher
   locatingMe: false,     // true while a geolocation request is in flight
-  postLoginRedirect: null,   // { view, selectedTeacherId } — where to send the user back to after they log in mid-action
+  postLoginRedirect: null,   // { view, selectedTeacherId, selectedTeacherFrom, reopenEnquiryFor } — where (and what) to restore after logging in or signing up mid-action, anywhere on the site
   adminTab: 'teachers',       // 'teachers' | 'students' — which list the admin panel is showing
 };
 try{
@@ -652,6 +653,36 @@ async function boot(){
   }
 }
 
+// Screens that are themselves part of the login/signup funnel — not worth
+// remembering as "where the user was", since landing back on them after
+// authenticating would just undo the flow instead of resuming a task.
+const AUTH_FUNNEL_VIEWS = new Set(['studentAuth','teacherAuth','teacherHome','teacherOnboarding','adminAuth']);
+// Snapshots the current screen right before sending the user off to log in
+// or sign up, so they can be dropped back exactly where they were —
+// including reopening things like the enquiry form — once they're done.
+// Called from every point on the site that redirects to studentAuth/
+// teacherAuth because an action needed an account first.
+function captureAuthRedirect(extra){
+  if(AUTH_FUNNEL_VIEWS.has(state.view)) return; // nothing worth remembering
+  state.postLoginRedirect = { view: state.view, selectedTeacherId: state.selectedTeacherId, selectedTeacherFrom: state.selectedTeacherFrom, ...extra };
+}
+// After logging in or signing up anywhere on the site, this sends the user
+// back to whatever screen prompted the login (restoring the teacher profile,
+// reopening the enquiry modal, etc.) instead of always dropping them on a
+// fixed default screen. Falls back to defaultView when there's nothing to
+// restore (e.g. they arrived at the auth screen directly, not mid-task).
+function goPostAuth(defaultView){
+  const redirect = state.postLoginRedirect;
+  state.postLoginRedirect = null;
+  if(redirect){
+    const { reopenEnquiryFor, ...navState } = redirect;
+    nav(navState.view, navState);
+    if(reopenEnquiryFor) openModal(enquiryModal(reopenEnquiryFor));
+    return;
+  }
+  nav(defaultView);
+}
+
 async function signUpStudent(name, email, password){
   if(!name || !email || !password) return toast('Please fill in all fields', 'warn');
   if(password.length < 6) return toast('Password must be at least 6 characters', 'warn');
@@ -668,7 +699,7 @@ async function signUpStudent(name, email, password){
       await refreshProfile();
       studentDataStatus = 'idle';
       toast('🎉 Account created!', 'ok');
-      goPostLogin();
+      goPostAuth('studentDashboard');
     }else{
       toast('✅ Account created — check your email to confirm, then log in.', 'ok');
       state.studentAuthMode = 'login';
@@ -690,20 +721,10 @@ async function signInStudent(email, password){
     await refreshProfile();
     studentDataStatus = 'idle';
     toast('👋 Logged in successfully', 'ok');
-    goPostLogin();
+    goPostAuth('studentDashboard');
   }finally{
     authFlowInProgress = false;
   }
-}
-
-// After a student logs in or signs up, send them back to whatever they
-// were doing (e.g. enrolling with a teacher) instead of always landing
-// on the dashboard.
-function goPostLogin(){
-  const redirect = state.postLoginRedirect;
-  state.postLoginRedirect = null;
-  if(redirect){ nav(redirect.view, redirect); return; }
-  nav('studentDashboard');
 }
 
 async function signUpTeacher(name, email, password){
@@ -732,7 +753,7 @@ async function signUpTeacher(name, email, password){
       // into a one-time onboarding panel instead of the (still-empty) dashboard.
       state.selectedTeacherProfile = { ...freshTeacherProfile, schedule_slots: [] };
       toast('🎉 Teacher account created — let\'s fill in your profile.', 'ok');
-      nav('teacherOnboarding');
+      goPostAuth('teacherOnboarding');
     }else{
       toast('✅ Account created — check your email to confirm, then log in.', 'ok');
       state.teacherAuthMode = 'login';
@@ -754,7 +775,7 @@ async function signInTeacher(email, password){
     await refreshProfile();
     teacherDataStatus = 'idle';
     toast('👋 Welcome back', 'ok');
-    nav('teacherDashboard');
+    goPostAuth('teacherDashboard');
   }finally{
     authFlowInProgress = false;
   }
@@ -1768,6 +1789,7 @@ document.addEventListener('click', (e)=>{
     case 'go':
       if(el.dataset.mode && el.dataset.view==='teacherAuth') state.teacherAuthMode = el.dataset.mode;
       if(el.dataset.mode && el.dataset.view==='studentAuth') state.studentAuthMode = el.dataset.mode;
+      if(el.dataset.view==='studentAuth' || el.dataset.view==='teacherAuth') captureAuthRedirect();
       nav(el.dataset.view); break;
     case 'switch-portal':
       state.portal = el.dataset.portal;
@@ -1830,7 +1852,12 @@ document.addEventListener('click', (e)=>{
       nav('teacherProfile', {selectedTeacherId: el.dataset.id, selectedTeacherFrom: state.view==='browse' ? 'browse' : 'home'});
       break;
     case 'open-enquiry':
-      if(!state.session || state.profile?.role!=='student'){ toast('Please log in as a parent/student first', 'warn'); nav('studentAuth'); return; }
+      if(!state.session || state.profile?.role!=='student'){
+        captureAuthRedirect({ reopenEnquiryFor: el.dataset.id });
+        toast('Please log in as a parent/student first', 'warn');
+        nav('studentAuth');
+        return;
+      }
       openModal(enquiryModal(el.dataset.id));
       break;
     case 'close-modal':
@@ -1855,7 +1882,7 @@ document.addEventListener('click', (e)=>{
       if(!state.session || state.profile?.role!=='student'){
         // Remember where they were trying to enroll so we can send them
         // straight back here once they've logged in.
-        state.postLoginRedirect = { view:'teacherProfile', selectedTeacherId: t.id };
+        captureAuthRedirect();
         toast('Please log in as a parent/student first', 'warn');
         nav('studentAuth');
         return;
@@ -2081,23 +2108,29 @@ document.addEventListener('keydown', (e)=>{
   const id = e.target.id;
   if(id==='suName' || id==='suEmail' || id==='suPassword'){
     e.preventDefault();
+    const btn = document.querySelector('[data-action="login-student"], [data-action="signup-student"]');
+    setBtnLoading(btn, true);
     if(state.studentAuthMode==='login'){
-      signInStudent(document.getElementById('suEmail').value, document.getElementById('suPassword').value);
+      signInStudent(document.getElementById('suEmail').value, document.getElementById('suPassword').value).finally(()=>setBtnLoading(btn, false));
     }else{
-      signUpStudent(document.getElementById('suName').value, document.getElementById('suEmail').value, document.getElementById('suPassword').value);
+      signUpStudent(document.getElementById('suName').value, document.getElementById('suEmail').value, document.getElementById('suPassword').value).finally(()=>setBtnLoading(btn, false));
     }
   }
   if(id==='tuName' || id==='tuEmail' || id==='tuPassword'){
     e.preventDefault();
+    const btn = document.querySelector('[data-action="login-teacher"], [data-action="signup-teacher"]');
+    setBtnLoading(btn, true);
     if(state.teacherAuthMode==='login'){
-      signInTeacher(document.getElementById('tuEmail').value, document.getElementById('tuPassword').value);
+      signInTeacher(document.getElementById('tuEmail').value, document.getElementById('tuPassword').value).finally(()=>setBtnLoading(btn, false));
     }else{
-      signUpTeacher(document.getElementById('tuName').value, document.getElementById('tuEmail').value, document.getElementById('tuPassword').value);
+      signUpTeacher(document.getElementById('tuName').value, document.getElementById('tuEmail').value, document.getElementById('tuPassword').value).finally(()=>setBtnLoading(btn, false));
     }
   }
   if(id==='adUsername' || id==='adPassword'){
     e.preventDefault();
-    signInAdmin(document.getElementById('adUsername').value, document.getElementById('adPassword').value);
+    const btn = document.querySelector('[data-action="login-admin"]');
+    setBtnLoading(btn, true);
+    signInAdmin(document.getElementById('adUsername').value, document.getElementById('adPassword').value).finally(()=>setBtnLoading(btn, false));
   }
 });
 
