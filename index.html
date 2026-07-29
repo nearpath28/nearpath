@@ -1639,9 +1639,14 @@ document.addEventListener('click', (e)=>{
       break;
     case 'admin-delete-profile': {
       const name = el.dataset.name, role = el.dataset.role, id = el.dataset.id;
-      if(!confirm(`Delete ${role} "${name}"? This permanently removes their account and all related data (listings, enrollments, payments, reviews). This cannot be undone.`)) return;
-      sb.from('profiles').delete().eq('id', id).then(({error})=>{
+      if(!confirm(`Delete ${role} "${name}"? This permanently removes their login and all related data (listings, enrollments, payments, reviews). This cannot be undone.`)) return;
+      // Calls the admin-delete-user Edge Function, which deletes the
+      // Supabase Auth account itself (not just the profiles row). That
+      // auth deletion cascades down to profiles and everything tied to
+      // it, so the user is fully gone, not just logged-out-and-orphaned.
+      sb.functions.invoke('admin-delete-user', { body: { id } }).then(({data, error})=>{
         if(error){ toast('❌ ' + error.message, 'err'); return; }
+        if(data?.error){ toast('❌ ' + data.error, 'err'); return; }
         toast('🗑️ Removed ' + name, 'ok');
         adminDataStatus = 'idle';
         ensureAdminData();
