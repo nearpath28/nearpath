@@ -1,10 +1,10 @@
 -- NearPath Tutors — database schema for Supabase
 -- Run this once in your Supabase project's SQL Editor (see README.md).
 
--- 1) profiles: one row per signed-up user (student or teacher)
+-- 1) profiles: one row per signed-up user (student, teacher, or admin)
 create table profiles (
   id uuid primary key references auth.users(id) on delete cascade,
-  role text not null check (role in ('student','teacher')),
+  role text not null check (role in ('student','teacher','admin')),
   full_name text not null,
   created_at timestamptz not null default now()
 );
@@ -101,6 +101,26 @@ create policy "profiles are publicly readable" on profiles for select using (tru
 create policy "users can insert their own profile" on profiles for insert with check (auth.uid() = id);
 create policy "users can update their own profile" on profiles for update using (auth.uid() = id);
 
+-- ---------------------------------------------------------------
+-- Admin: is_admin() checks whether the currently-authenticated user's own
+-- profile row has role='admin'. It's security definer so it can read
+-- profiles.role for that check regardless of which policy is currently
+-- being evaluated. Only a user who is genuinely signed in via Supabase
+-- auth AND already marked role='admin' (see README "Part 7" for how to
+-- create that account) passes this — the admin login screen's password
+-- box is what Supabase actually checks; this function is what the
+-- database checks before allowing a delete.
+-- ---------------------------------------------------------------
+create or replace function is_admin() returns boolean as $$
+  select exists(select 1 from profiles where id = auth.uid() and role = 'admin');
+$$ language sql security definer stable;
+
+-- Lets an admin remove any teacher or student's profile from the admin
+-- panel. Deleting a profiles row cascades (via each table's "on delete
+-- cascade") to that person's teacher_profiles/schedule_slots, enquiries,
+-- enrollments, payments, and reviews automatically.
+create policy "admins can delete any profile" on profiles for delete using (is_admin());
+
 -- teacher_profiles: the whole point is to be a public directory.
 create policy "teacher profiles are publicly readable" on teacher_profiles for select using (true);
 create policy "teachers can insert their own listing" on teacher_profiles for insert with check (auth.uid() = profile_id);
@@ -169,3 +189,17 @@ for each row execute function update_teacher_rating();
 -- alter table teacher_profiles add column if not exists lat double precision;
 -- alter table teacher_profiles add column if not exists lng double precision;
 -- alter table teacher_profiles drop column if exists distance;
+
+-- ---------------------------------------------------------------
+-- MIGRATION: adds the 'admin' role and the ability for an admin to delete
+-- any teacher/student profile (for the admin panel). Safe to re-run.
+-- ---------------------------------------------------------------
+-- alter table profiles drop constraint if exists profiles_role_check;
+-- alter table profiles add constraint profiles_role_check check (role in ('student','teacher','admin'));
+--
+-- create or replace function is_admin() returns boolean as $$
+--   select exists(select 1 from profiles where id = auth.uid() and role = 'admin');
+-- $$ language sql security definer stable;
+--
+-- drop policy if exists "admins can delete any profile" on profiles;
+-- create policy "admins can delete any profile" on profiles for delete using (is_admin());

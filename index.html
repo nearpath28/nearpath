@@ -246,6 +246,12 @@ const SUPABASE_ANON_KEY = 'sb_publishable_jxbHGhZSFqv6Aw1XNVQPfA_wMJr3ECi';
 const sb = (SUPABASE_URL.startsWith('http'))
   ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
+// The admin login screen shows a "username" field for a friendlier feel,
+// but under the hood it signs in as this fixed Supabase auth account —
+// see README "Part 7" for how to create it. The real gate is the account's
+// password (checked by Supabase, not by this frontend code) plus its
+// profiles.role='admin', which is what the delete policies check.
+const ADMIN_EMAIL = 'admin@nearpathtutors.internal';
 </script>
 
 <script>
@@ -279,6 +285,7 @@ const state = {
   myLocation: null,      // { lat, lng } for the person browsing — used to auto-calc distance to each teacher
   locatingMe: false,     // true while a geolocation request is in flight
   postLoginRedirect: null,   // { view, selectedTeacherId } — where to send the user back to after they log in mid-action
+  adminTab: 'teachers',       // 'teachers' | 'students' — which list the admin panel is showing
 };
 try{
   var savedLoc = localStorage.getItem('npt-my-location');
@@ -371,6 +378,10 @@ let teacherReviews = [];    // reviews shown on a teacher's public profile page
 let teacherReviewsStatus = 'idle';
 let teacherReviewsForId = null;
 
+let ADMIN_TEACHERS = [];    // every teacher profile, for the admin panel
+let ADMIN_STUDENTS = [];    // every student profile, for the admin panel
+let adminDataStatus = 'idle'; // idle | loading | ready | error
+
 function nav(view, extra){
   state.view = view;
   if(extra) Object.assign(state, extra);
@@ -379,6 +390,7 @@ function nav(view, extra){
   if(view==='teacherProfile' && state.selectedTeacherId) ensureTeacherReviews(state.selectedTeacherId);
   if(view==='studentDashboard') ensureStudentData();
   if(view==='teacherDashboard') ensureTeacherData();
+  if(view==='adminDashboard') ensureAdminData();
   render();
 }
 
@@ -442,6 +454,16 @@ async function refreshProfile(){
 }
 
 let lastAuthUserId = null;
+// Supabase fires SIGNED_IN on onAuthStateChange as soon as signUp()/
+// signInWithPassword() resolves internally — which lands *before* our own
+// signUpStudent/signInStudent/etc functions below finish their own
+// refreshProfile() + nav(). Without this flag, that listener's render()
+// briefly repaints the still-open auth dialog (now with a session but the
+// old view) right before nav() switches to the dashboard, which looks like
+// the dialog "reloading" for a moment. The explicit flows set this while
+// they're mid-flight so the listener updates state silently and lets the
+// explicit flow's own nav()/render() do the (single) visible transition.
+let authFlowInProgress = false;
 
 async function boot(){
   if(!isConfigured()){ render(); return; }
@@ -455,9 +477,10 @@ async function boot(){
     const newUserId = session?.user?.id || null;
     if(newUserId !== lastAuthUserId){
       await refreshProfile();
-      studentDataStatus = 'idle'; teacherDataStatus = 'idle';
+      studentDataStatus = 'idle'; teacherDataStatus = 'idle'; adminDataStatus = 'idle';
       lastAuthUserId = newUserId;
     }
+    if(authFlowInProgress) return;
     render();
   });
 
@@ -485,35 +508,45 @@ async function boot(){
 async function signUpStudent(name, email, password){
   if(!name || !email || !password) return toast('Please fill in all fields', 'warn');
   if(password.length < 6) return toast('Password must be at least 6 characters', 'warn');
-  const { data, error } = await sb.auth.signUp({ email, password, options:{ data:{ full_name:name, role:'student' } } });
-  if(error) return toast('❌ ' + error.message, 'err');
-  if(data.user){
-    await sb.from('profiles').insert({ id:data.user.id, role:'student', full_name:name });
-  }
-  if(data.session){
-    state.session = data.session;
-    lastAuthUserId = data.session.user.id;
-    await refreshProfile();
-    studentDataStatus = 'idle';
-    toast('🎉 Account created!', 'ok');
-    goPostLogin();
-  }else{
-    toast('✅ Account created — check your email to confirm, then log in.', 'ok');
-    state.studentAuthMode = 'login';
-    render();
+  authFlowInProgress = true;
+  try{
+    const { data, error } = await sb.auth.signUp({ email, password, options:{ data:{ full_name:name, role:'student' } } });
+    if(error) return toast('❌ ' + error.message, 'err');
+    if(data.user){
+      await sb.from('profiles').insert({ id:data.user.id, role:'student', full_name:name });
+    }
+    if(data.session){
+      state.session = data.session;
+      lastAuthUserId = data.session.user.id;
+      await refreshProfile();
+      studentDataStatus = 'idle';
+      toast('🎉 Account created!', 'ok');
+      goPostLogin();
+    }else{
+      toast('✅ Account created — check your email to confirm, then log in.', 'ok');
+      state.studentAuthMode = 'login';
+      render();
+    }
+  }finally{
+    authFlowInProgress = false;
   }
 }
 
 async function signInStudent(email, password){
   if(!email || !password) return toast('Please fill in all fields', 'warn');
-  const { data, error } = await sb.auth.signInWithPassword({ email, password });
-  if(error) return toast('❌ ' + error.message, 'err');
-  state.session = data.session;
-  lastAuthUserId = data.session?.user?.id || null;
-  await refreshProfile();
-  studentDataStatus = 'idle';
-  toast('👋 Logged in successfully', 'ok');
-  goPostLogin();
+  authFlowInProgress = true;
+  try{
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    if(error) return toast('❌ ' + error.message, 'err');
+    state.session = data.session;
+    lastAuthUserId = data.session?.user?.id || null;
+    await refreshProfile();
+    studentDataStatus = 'idle';
+    toast('👋 Logged in successfully', 'ok');
+    goPostLogin();
+  }finally{
+    authFlowInProgress = false;
+  }
 }
 
 // After a student logs in or signs up, send them back to whatever they
@@ -529,45 +562,83 @@ function goPostLogin(){
 async function signUpTeacher(name, email, password){
   if(!name || !email || !password) return toast('Please fill in all fields', 'warn');
   if(password.length < 6) return toast('Password must be at least 6 characters', 'warn');
-  const { data, error } = await sb.auth.signUp({ email, password, options:{ data:{ full_name:name, role:'teacher' } } });
-  if(error) return toast('❌ ' + error.message, 'err');
-  let freshTeacherProfile = null;
-  if(data.user){
-    await sb.from('profiles').insert({ id:data.user.id, role:'teacher', full_name:name });
-    freshTeacherProfile = {
-      profile_id:data.user.id, initials: name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase(),
-      color: AVATAR_COLORS[Math.floor(Math.random()*AVATAR_COLORS.length)], category:'academics',
-      subjects:[], location:'', lat:null, lng:null, fee_start:0, fee_unit:'/month', experience:'', bio:'',
-    };
-    await sb.from('teacher_profiles').insert(freshTeacherProfile);
-  }
-  if(data.session){
-    state.session = data.session;
-    lastAuthUserId = data.session.user.id;
-    await refreshProfile();
-    teacherDataStatus = 'idle';
-    // A brand-new teacher has no listing details yet — send them straight
-    // into a one-time onboarding panel instead of the (still-empty) dashboard.
-    state.selectedTeacherProfile = { ...freshTeacherProfile, schedule_slots: [] };
-    toast('🎉 Teacher account created — let\'s fill in your profile.', 'ok');
-    nav('teacherOnboarding');
-  }else{
-    toast('✅ Account created — check your email to confirm, then log in.', 'ok');
-    state.teacherAuthMode = 'login';
-    render();
+  authFlowInProgress = true;
+  try{
+    const { data, error } = await sb.auth.signUp({ email, password, options:{ data:{ full_name:name, role:'teacher' } } });
+    if(error) return toast('❌ ' + error.message, 'err');
+    let freshTeacherProfile = null;
+    if(data.user){
+      await sb.from('profiles').insert({ id:data.user.id, role:'teacher', full_name:name });
+      freshTeacherProfile = {
+        profile_id:data.user.id, initials: name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase(),
+        color: AVATAR_COLORS[Math.floor(Math.random()*AVATAR_COLORS.length)], category:'academics',
+        subjects:[], location:'', lat:null, lng:null, fee_start:0, fee_unit:'/month', experience:'', bio:'',
+      };
+      await sb.from('teacher_profiles').insert(freshTeacherProfile);
+    }
+    if(data.session){
+      state.session = data.session;
+      lastAuthUserId = data.session.user.id;
+      await refreshProfile();
+      teacherDataStatus = 'idle';
+      // A brand-new teacher has no listing details yet — send them straight
+      // into a one-time onboarding panel instead of the (still-empty) dashboard.
+      state.selectedTeacherProfile = { ...freshTeacherProfile, schedule_slots: [] };
+      toast('🎉 Teacher account created — let\'s fill in your profile.', 'ok');
+      nav('teacherOnboarding');
+    }else{
+      toast('✅ Account created — check your email to confirm, then log in.', 'ok');
+      state.teacherAuthMode = 'login';
+      render();
+    }
+  }finally{
+    authFlowInProgress = false;
   }
 }
 
 async function signInTeacher(email, password){
   if(!email || !password) return toast('Please fill in all fields', 'warn');
-  const { data, error } = await sb.auth.signInWithPassword({ email, password });
-  if(error) return toast('❌ ' + error.message, 'err');
-  state.session = data.session;
-  lastAuthUserId = data.session?.user?.id || null;
-  await refreshProfile();
-  teacherDataStatus = 'idle';
-  toast('👋 Welcome back', 'ok');
-  nav('teacherDashboard');
+  authFlowInProgress = true;
+  try{
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    if(error) return toast('❌ ' + error.message, 'err');
+    state.session = data.session;
+    lastAuthUserId = data.session?.user?.id || null;
+    await refreshProfile();
+    teacherDataStatus = 'idle';
+    toast('👋 Welcome back', 'ok');
+    nav('teacherDashboard');
+  }finally{
+    authFlowInProgress = false;
+  }
+}
+
+// The "username" field is a cosmetic check only — it just avoids a confusing
+// "wrong password" error if someone fat-fingers the field. The actual gate is
+// Supabase auth (the account's real password) plus its profiles.role being
+// 'admin', which is what the delete policies in schema.sql check server-side.
+async function signInAdmin(username, password){
+  if(!username || !password) return toast('Please fill in all fields', 'warn');
+  if(username.trim().toLowerCase() !== 'admin') return toast('❌ Unknown admin username', 'err');
+  authFlowInProgress = true;
+  try{
+    const { data, error } = await sb.auth.signInWithPassword({ email: ADMIN_EMAIL, password });
+    if(error) return toast('❌ Incorrect password', 'err');
+    state.session = data.session;
+    lastAuthUserId = data.session?.user?.id || null;
+    await refreshProfile();
+    if(state.profile?.role !== 'admin'){
+      await sb.auth.signOut();
+      state.session = null; state.profile = null; lastAuthUserId = null;
+      toast('❌ This account is not set up as an admin', 'err');
+      return;
+    }
+    adminDataStatus = 'idle';
+    toast('🔓 Admin access granted', 'ok');
+    nav('adminDashboard');
+  }finally{
+    authFlowInProgress = false;
+  }
 }
 
 async function logout(){
@@ -684,6 +755,35 @@ async function ensureTeacherReviews(teacherId, force){
   render();
 }
 
+// Loads every profile for the admin panel. Deliberately two plain queries
+// (rather than an embedded join) merged client-side, so it works the same
+// regardless of PostgREST's embed direction for the profiles<->teacher_profiles
+// relationship. RLS still applies: 'profiles' and 'teacher_profiles' are
+// both publicly readable, so this works whether or not the viewer is an admin —
+// it's the delete action below that's actually gated (see schema.sql).
+async function ensureAdminData(force){
+  if(!state.session || state.profile?.role!=='admin') return;
+  if(adminDataStatus==='ready' && !force) return;
+  adminDataStatus = 'loading';
+  try{
+    const [{data:profiles, error}, {data:teacherRows, error:tErr}] = await Promise.all([
+      sb.from('profiles').select('*').order('created_at',{ascending:false}),
+      sb.from('teacher_profiles').select('profile_id, category, subjects, fee_start, fee_unit, rating, reviews'),
+    ]);
+    if(error) throw error;
+    if(tErr) throw tErr;
+    const teacherById = {};
+    teacherRows.forEach(t=>{ teacherById[t.profile_id] = t; });
+    ADMIN_STUDENTS = profiles.filter(p=>p.role==='student');
+    ADMIN_TEACHERS = profiles.filter(p=>p.role==='teacher').map(p=>({ ...p, listing: teacherById[p.id] || null }));
+    adminDataStatus = 'ready';
+  }catch(err){
+    console.error('Failed to load admin data', err);
+    adminDataStatus = 'error';
+  }
+  render();
+}
+
 /* =========================================================
    SHARED CHROME (navbar)
 ========================================================= */
@@ -711,6 +811,7 @@ function navbar(){
           <div class="pill ${c==='customer'?'active':''}" data-action="switch-portal" data-portal="customer">👪 Parents</div>
           <div class="pill ${c==='teacher'?'active':''}" data-action="switch-portal" data-portal="teacher">🍎 Teachers</div>
           <button class="btn btn-ghost btn-sm" data-action="toggle-theme" title="Switch to ${currentTheme()==='dark'?'light':'dark'} theme" aria-label="Toggle theme">${currentTheme()==='dark' ? '☀️' : '🌙'}</button>
+          <button class="btn btn-ghost btn-sm" data-action="go-admin" title="Admin panel" aria-label="Admin panel">🛡️</button>
           ${loggedIn
             ? `<button class="btn btn-ghost btn-sm" data-action="logout">🚪 Log out</button>`
             : `<button class="btn btn-primary btn-sm" data-action="go" data-view="${c==='customer'?'studentAuth':'teacherAuth'}" data-mode="login">Log in</button>`}
@@ -765,7 +866,7 @@ function viewHome(){
         <h2 style="font-size:24px;">Featured near you</h2>
         <button class="btn btn-ghost btn-sm" data-action="go" data-view="browse">View all →</button>
       </div>
-      ${featured.length ? `<div class="grid-cards stagger">${featured.map(teacherCard).join('')}</div>` : `<div class="glass" style="padding:40px; text-align:center;"><p class="muted">No teachers have listed themselves yet — be the first!</p><button class="btn btn-primary btn-sm" style="margin-top:12px;" data-action="switch-portal" data-portal="teacher">Register as a teacher</button></div>`}
+      ${featured.length ? `<div class="grid-cards stagger">${featured.map(teacherCard).join('')}</div>` : `<div class="glass" style="padding:40px; text-align:center;"><p class="muted">No teachers have listed themselves yet — be the first!</p><button class="btn btn-primary btn-sm" style="margin-top:12px;" data-action="register-as-teacher">Register as a teacher</button></div>`}
     </div>
 
     <div style="margin-top:64px; display:grid; grid-template-columns:repeat(3,1fr); gap:20px;" class="fade-in grid-2">
@@ -997,8 +1098,8 @@ function viewStudentAuth(){
       <button class="btn btn-primary btn-block" data-action="${mode==='login'?'login-student':'signup-student'}">${mode==='login'?'Log in':'Create account'}</button>
       <p class="muted" style="text-align:center; font-size:13px; margin-top:16px;">
         ${mode==='login'
-          ? `New here? <a style="color:var(--primary); font-weight:600;" data-action="student-auth-mode" data-mode="signup">Create an account →</a>`
-          : `Already have an account? <a style="color:var(--primary); font-weight:600;" data-action="student-auth-mode" data-mode="login">Log in →</a>`}
+          ? `New here? <a style="color:var(--primary); font-weight:600; cursor:pointer;" data-action="student-auth-mode" data-mode="signup">Create an account →</a>`
+          : `Already have an account? <a style="color:var(--primary); font-weight:600; cursor:pointer;" data-action="student-auth-mode" data-mode="login">Log in →</a>`}
       </p>
     </div>
   </div>`;
@@ -1134,8 +1235,8 @@ function viewTeacherAuth(){
       <button class="btn btn-primary btn-block" data-action="${mode==='login'?'login-teacher':'signup-teacher'}">${mode==='login'?'Log in':'Create account'}</button>
       <p class="muted" style="text-align:center; font-size:13px; margin-top:16px;">
         ${mode==='login'
-          ? `New here? <a style="color:var(--primary); font-weight:600;" data-action="teacher-auth-mode" data-mode="signup">Register as a teacher →</a>`
-          : `Already have an account? <a style="color:var(--primary); font-weight:600;" data-action="teacher-auth-mode" data-mode="login">Log in →</a>`}
+          ? `New here? <a style="color:var(--primary); font-weight:600; cursor:pointer;" data-action="teacher-auth-mode" data-mode="signup">Register as a teacher →</a>`
+          : `Already have an account? <a style="color:var(--primary); font-weight:600; cursor:pointer;" data-action="teacher-auth-mode" data-mode="login">Log in →</a>`}
       </p>
     </div>
   </div>`;
@@ -1276,7 +1377,6 @@ function teacherOnboardingFields(){
         <button type="button" class="btn btn-ghost btn-sm" data-action="teacher-set-location" ${state.locatingMe?'disabled':''}>${state.locatingMe?'Locating…':'📍 Use my current location'}</button>
         <span class="muted" style="font-size:12.5px;" id="peLocStatus">${(t.lat!=null && t.lng!=null) ? 'Location set — students will see their distance to you' : 'Not set yet — students won\'t see a distance until you set this'}</span>
       </div>
-      <p class="muted" style="font-size:12px; margin-top:6px;">Stand at (or near) where you teach and tap the button — this replaces typing in a distance by hand, since it's calculated live from each student's own location.</p>
     </div>
     <div class="field"><label class="field-label">Experience</label><input class="input" id="peExperience" value="${t.experience||''}" placeholder="8 yrs"/></div>
     <div class="field"><label class="field-label">Monthly fee (₹)</label><input class="input" id="peFee" type="number" value="${t.fee_start||0}"/></div>
@@ -1328,9 +1428,62 @@ function viewTeacherDashboard(){
   </div>`;
 }
 
-/* =========================================================
-   MODALS
-========================================================= */
+function viewAdminAuth(){
+  return `
+  ${navbar()}
+  <div class="wrap view-transition" style="padding-top:80px; max-width:420px; margin:0 auto;">
+    <div class="glass" style="padding:32px;">
+      <h2 style="font-size:22px; margin-bottom:6px;">🔒 Admin login</h2>
+      <p class="muted" style="font-size:13px; margin-bottom:22px;">Restricted — for site administrators only.</p>
+      <div class="field"><label class="field-label">Username</label><input class="input" id="adUsername" placeholder="admin"/></div>
+      <div class="field"><label class="field-label">Password</label><input class="input" id="adPassword" type="password" placeholder="••••••••"/></div>
+      <button class="btn btn-primary btn-block" data-action="login-admin">Log in</button>
+      <p class="muted" style="text-align:center; font-size:13px; margin-top:16px;"><a style="color:var(--text-dim); cursor:pointer;" data-action="go-home">← Back to site</a></p>
+    </div>
+  </div>`;
+}
+
+function viewAdminDashboard(){
+  if(!state.session || state.profile?.role!=='admin') return viewAdminAuth();
+  if(adminDataStatus!=='ready'){
+    return `${navbar()}${adminDataStatus==='error' ? errorScreen('admin data') : loadingScreen('the admin panel')}`;
+  }
+  const rows = state.adminTab==='teachers' ? ADMIN_TEACHERS : ADMIN_STUDENTS;
+  return `
+  ${navbar()}
+  <div class="wrap view-transition" style="padding-top:32px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:22px;">
+      <div>
+        <div class="eyebrow">Admin panel</div>
+        <h1 style="font-size:26px; margin-top:4px;">All profiles</h1>
+      </div>
+      <button class="btn btn-ghost btn-sm" data-action="logout">🚪 Log out</button>
+    </div>
+    <div style="display:flex; gap:10px; margin-bottom:18px;">
+      <div class="pill ${state.adminTab==='teachers'?'active':''}" data-action="admin-tab" data-tab="teachers">🍎 Teachers (${ADMIN_TEACHERS.length})</div>
+      <div class="pill ${state.adminTab==='students'?'active':''}" data-action="admin-tab" data-tab="students">👪 Students (${ADMIN_STUDENTS.length})</div>
+    </div>
+    <div class="glass" style="padding:22px;">
+      ${rows.length ? `<table class="data-table">
+        <thead><tr><th>Name</th>${state.adminTab==='teachers' ? '<th>Category</th><th>Subjects</th><th>Rating</th>' : ''}<th>Joined</th><th></th></tr></thead>
+        <tbody>
+          ${rows.map(p=>`
+          <tr>
+            <td style="font-weight:600;">${p.full_name || 'Unnamed'}</td>
+            ${state.adminTab==='teachers' ? `
+            <td class="muted">${p.listing?.category || '—'}</td>
+            <td class="muted">${(p.listing?.subjects||[]).join(', ') || '—'}</td>
+            <td class="muted">${p.listing?.reviews ? `${p.listing.rating}★ (${p.listing.reviews})` : 'New'}</td>` : ''}
+            <td class="muted">${new Date(p.created_at).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'})}</td>
+            <td><button class="btn btn-ghost btn-sm" style="color:var(--red);" data-action="admin-delete-profile" data-id="${p.id}" data-name="${(p.full_name||'this user').replace(/"/g,'&quot;')}" data-role="${p.role}">🗑️ Remove</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>` : `<p class="muted" style="font-size:13.5px;">No ${state.adminTab} yet.</p>`}
+    </div>
+  </div>`;
+}
+
+
 let modalHTML = '';
 function openModal(html){ modalHTML = html; renderModal(); }
 function closeModal(){ modalHTML=''; renderModal(); }
@@ -1439,6 +1592,7 @@ function render(){
     studentAuth: viewStudentAuth, studentDashboard: viewStudentDashboard,
     teacherHome: viewTeacherHome, teacherAuth: viewTeacherAuth, teacherDashboard: viewTeacherDashboard,
     teacherOnboarding: viewTeacherOnboarding,
+    adminAuth: viewAdminAuth, adminDashboard: viewAdminDashboard,
   };
   let html;
   if(NEEDS_TEACHERS.has(state.view) && teachersStatus !== 'ready'){
@@ -1449,6 +1603,9 @@ function render(){
   }else if(state.view==='teacherDashboard' && state.session && state.profile?.role==='teacher' && teacherDataStatus==='idle'){
     ensureTeacherData();
     html = navbar() + loadingScreen('your dashboard');
+  }else if(state.view==='adminDashboard' && state.session && state.profile?.role==='admin' && adminDataStatus==='idle'){
+    ensureAdminData();
+    html = navbar() + loadingScreen('the admin panel');
   }else{
     html = views[state.view]();
   }
@@ -1469,6 +1626,37 @@ document.addEventListener('click', (e)=>{
     case 'switch-portal':
       state.portal = el.dataset.portal;
       nav(state.portal==='customer' ? 'home' : (state.session && state.profile?.role==='teacher' ? 'teacherDashboard' : 'teacherHome'));
+      break;
+    case 'go-admin':
+      nav(state.session && state.profile?.role==='admin' ? 'adminDashboard' : 'adminAuth');
+      break;
+    case 'login-admin':
+      signInAdmin(document.getElementById('adUsername').value, document.getElementById('adPassword').value);
+      break;
+    case 'admin-tab':
+      state.adminTab = el.dataset.tab;
+      render();
+      break;
+    case 'admin-delete-profile': {
+      const name = el.dataset.name, role = el.dataset.role, id = el.dataset.id;
+      if(!confirm(`Delete ${role} "${name}"? This permanently removes their account and all related data (listings, enrollments, payments, reviews). This cannot be undone.`)) return;
+      sb.from('profiles').delete().eq('id', id).then(({error})=>{
+        if(error){ toast('❌ ' + error.message, 'err'); return; }
+        toast('🗑️ Removed ' + name, 'ok');
+        adminDataStatus = 'idle';
+        ensureAdminData();
+        teachersStatus = 'idle'; // the removed teacher may be cached in the public listing too
+      });
+      break;
+    }
+    case 'register-as-teacher':
+      state.portal = 'teacher';
+      if(state.session && state.profile?.role==='teacher'){
+        nav('teacherDashboard');
+      }else{
+        state.teacherAuthMode = 'signup';
+        nav('teacherAuth');
+      }
       break;
     case 'filter-cat':
       state.filters.category = el.dataset.cat;
@@ -1645,6 +1833,7 @@ document.addEventListener('click', (e)=>{
       ensureTeachers(true);
       if(state.view==='studentDashboard') ensureStudentData(true);
       if(state.view==='teacherDashboard') ensureTeacherData(true);
+      if(state.view==='adminDashboard') ensureAdminData(true);
       break;
   }
 });
@@ -1749,6 +1938,10 @@ document.addEventListener('keydown', (e)=>{
     }else{
       signUpTeacher(document.getElementById('tuName').value, document.getElementById('tuEmail').value, document.getElementById('tuPassword').value);
     }
+  }
+  if(id==='adUsername' || id==='adPassword'){
+    e.preventDefault();
+    signInAdmin(document.getElementById('adUsername').value, document.getElementById('adPassword').value);
   }
 });
 
