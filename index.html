@@ -1733,6 +1733,7 @@ document.addEventListener('click', (e)=>{
     case 'admin-delete-profile': {
       const name = el.dataset.name, role = el.dataset.role, id = el.dataset.id;
       if(!confirm(`Delete ${role} "${name}"? This permanently removes their login and all related data (listings, enrollments, payments, reviews). This cannot be undone.`)) return;
+      setBtnLoading(el, true);
       // Calls the admin-delete-user Edge Function, which deletes the
       // Supabase Auth account itself (not just the profiles row). That
       // auth deletion cascades down to profiles and everything tied to
@@ -1744,7 +1745,7 @@ document.addEventListener('click', (e)=>{
         adminDataStatus = 'idle';
         ensureAdminData();
         teachersStatus = 'idle'; // the removed teacher may be cached in the public listing too
-      });
+      }).finally(()=>setBtnLoading(el, false));
       break;
     }
     case 'register-as-teacher':
@@ -1793,12 +1794,13 @@ document.addEventListener('click', (e)=>{
       break;
     case 'send-enquiry': {
       const msg = document.getElementById('enquiryMsg').value;
+      setBtnLoading(el, true);
       sb.from('enquiries').insert({ teacher_id: el.dataset.id, student_id: state.session.user.id, message: msg })
         .then(({error})=>{
           if(error){ toast('❌ ' + error.message, 'err'); return; }
           closeModal();
           toast('✅ Enquiry sent to ' + el.dataset.name + '!', 'ok');
-        });
+        }).finally(()=>setBtnLoading(el, false));
       break;
     }
     case 'enroll-now': {
@@ -1811,6 +1813,7 @@ document.addEventListener('click', (e)=>{
         nav('studentAuth');
         return;
       }
+      setBtnLoading(el, true);
       sb.from('enrollments').insert({
         student_id: state.session.user.id, teacher_id: t.id, subject: t.subjects[0]||'General',
         schedule: (t.schedule[0] ? `${t.schedule[0].day} ${t.schedule[0].time}` : ''), fee: t.feeStart, status:'due',
@@ -1819,7 +1822,7 @@ document.addEventListener('click', (e)=>{
         toast('✅ Enrolled with ' + t.name + '!', 'ok');
         studentDataStatus = 'idle';
         nav('studentDashboard');
-      });
+      }).finally(()=>setBtnLoading(el, false));
       break;
     }
     case 'student-auth-mode':
@@ -1843,7 +1846,8 @@ document.addEventListener('click', (e)=>{
       signUpTeacher(document.getElementById('tuName').value, document.getElementById('tuEmail').value, document.getElementById('tuPassword').value).finally(()=>setBtnLoading(el, false));
       break;
     case 'logout':
-      logout();
+      setBtnLoading(el, true);
+      logout().finally(()=>setBtnLoading(el, false));
       break;
     case 'toggle-theme':
       toggleTheme(el);
@@ -1859,10 +1863,12 @@ document.addEventListener('click', (e)=>{
       break;
     }
     case 'save-profile':
-      saveTeacherProfile();
+      setBtnLoading(el, true);
+      saveTeacherProfile().finally(()=>setBtnLoading(el, false));
       break;
     case 'save-profile-onboarding':
-      saveTeacherProfileOnboarding();
+      setBtnLoading(el, true);
+      saveTeacherProfileOnboarding().finally(()=>setBtnLoading(el, false));
       break;
     case 'skip-onboarding':
       nav('teacherDashboard');
@@ -1917,6 +1923,7 @@ document.addEventListener('click', (e)=>{
       const teacherId = el.dataset.teacher;
       const rating = parseInt(document.getElementById('reviewRating').value);
       const comment = document.getElementById('reviewComment').value.trim();
+      setBtnLoading(el, true);
       sb.from('reviews').upsert({
         teacher_id: teacherId, student_id: state.session.user.id, enrollment_id: enrollmentId,
         rating, comment,
@@ -1927,21 +1934,25 @@ document.addEventListener('click', (e)=>{
         studentDataStatus = 'idle';
         ensureStudentData(true);
         ensureTeachers(true); // refresh the teacher's averaged rating everywhere it's shown
-      });
+      }).finally(()=>setBtnLoading(el, false));
       break;
     }
     case 'open-pay':
       openModal(payModal());
       break;
     case 'confirm-pay':
-      confirmPay(document.getElementById('payMethod').value);
+      setBtnLoading(el, true);
+      confirmPay(document.getElementById('payMethod').value).finally(()=>setBtnLoading(el, false));
       break;
-    case 'retry-load':
-      ensureTeachers(true);
-      if(state.view==='studentDashboard') ensureStudentData(true);
-      if(state.view==='teacherDashboard') ensureTeacherData(true);
-      if(state.view==='adminDashboard') ensureAdminData(true);
+    case 'retry-load': {
+      setBtnLoading(el, true);
+      const reloads = [ensureTeachers(true)];
+      if(state.view==='studentDashboard') reloads.push(ensureStudentData(true));
+      if(state.view==='teacherDashboard') reloads.push(ensureTeacherData(true));
+      if(state.view==='adminDashboard') reloads.push(ensureAdminData(true));
+      Promise.all(reloads).finally(()=>setBtnLoading(el, false));
       break;
+    }
   }
 });
 
