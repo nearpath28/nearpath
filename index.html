@@ -738,6 +738,46 @@ async function logout(){
   nav(state.portal==='customer' ? 'home' : 'teacherHome');
 }
 
+// Step 1 of forgot-password: ask Supabase to email a 6-digit code to this
+// address. Supabase doesn't reveal whether the email exists (same
+// response either way), so the toast is worded generically. This only
+// works once the email template has been switched to show {{ .Token }} —
+// see README "Part 9".
+async function requestPasswordReset(email){
+  if(!email) return toast('Please enter your email', 'warn');
+  const { error } = await sb.auth.resetPasswordForEmail(email);
+  if(error) return toast('❌ ' + error.message, 'err');
+  fpEmail = email;
+  toast('📧 If that email has an account, a code is on its way', 'ok');
+  openModal(forgotPasswordModal('verify'));
+}
+
+// Step 2: verifying the code signs the user in with a short-lived
+// "recovery" session, which is exactly enough permission to call
+// updateUser() and set a new password — then they're left logged in.
+async function confirmPasswordReset(code, newPassword, confirmPassword){
+  if(!code || !newPassword || !confirmPassword) return toast('Please fill in all fields', 'warn');
+  if(newPassword.length < 6) return toast('Password must be at least 6 characters', 'warn');
+  if(newPassword !== confirmPassword) return toast("Passwords don't match", 'warn');
+  authFlowInProgress = true;
+  try{
+    const { data, error } = await sb.auth.verifyOtp({ email: fpEmail, token: code, type: 'recovery' });
+    if(error) return toast('❌ ' + error.message, 'err');
+    const { error: updateError } = await sb.auth.updateUser({ password: newPassword });
+    if(updateError) return toast('❌ ' + updateError.message, 'err');
+    state.session = data.session;
+    lastAuthUserId = data.session?.user?.id || null;
+    await refreshProfile();
+    closeModal();
+    toast('✅ Password updated — you\'re logged in', 'ok');
+    if(state.profile?.role==='teacher'){ teacherDataStatus = 'idle'; goPostAuth('teacherDashboard'); }
+    else if(state.profile?.role==='admin'){ nav('adminDashboard'); }
+    else{ studentDataStatus = 'idle'; goPostAuth('studentDashboard'); }
+  }finally{
+    authFlowInProgress = false;
+  }
+}
+
 /* =========================================================
    SUPABASE — DATA LOADERS
 ========================================================= */
@@ -1187,6 +1227,7 @@ function viewStudentAuth(){
       ${mode==='signup' ? `<div class="field"><label class="field-label">Your name</label><input class="input" id="suName" placeholder="Parent's name"/></div>` : ''}
       <div class="field"><label class="field-label">Email</label><input class="input" id="suEmail" placeholder="you@example.com" type="email"/></div>
       <div class="field"><label class="field-label">Password</label><input class="input" id="suPassword" placeholder="••••••••" type="password"/></div>
+      ${mode==='login' ? `<p style="text-align:right; margin:-8px 0 4px;"><a style="color:var(--primary); font-weight:600; cursor:pointer; font-size:12.5px;" data-action="forgot-password">Forgot password?</a></p>` : ''}
       <button class="btn btn-primary btn-block" data-action="${mode==='login'?'login-student':'signup-student'}">${mode==='login'?'Log in':'Create account'}</button>
       <p class="muted" style="text-align:center; font-size:13px; margin-top:16px;">
         ${mode==='login'
@@ -1324,6 +1365,7 @@ function viewTeacherAuth(){
       ${mode==='signup' ? `<div class="field"><label class="field-label">Your name</label><input class="input" id="tuName" placeholder="Full name"/></div>` : ''}
       <div class="field"><label class="field-label">Email</label><input class="input" id="tuEmail" placeholder="you@example.com" type="email"/></div>
       <div class="field"><label class="field-label">Password</label><input class="input" id="tuPassword" placeholder="••••••••" type="password"/></div>
+      ${mode==='login' ? `<p style="text-align:right; margin:-8px 0 4px;"><a style="color:var(--primary); font-weight:600; cursor:pointer; font-size:12.5px;" data-action="forgot-password">Forgot password?</a></p>` : ''}
       <button class="btn btn-primary btn-block" data-action="${mode==='login'?'login-teacher':'signup-teacher'}">${mode==='login'?'Log in':'Create account'}</button>
       <p class="muted" style="text-align:center; font-size:13px; margin-top:16px;">
         ${mode==='login'
@@ -1652,6 +1694,38 @@ function payModal(){
   </div>`;
 }
 
+// Forgot-password flow: step 1 collects the email and asks Supabase to
+// email a 6-digit code; step 2 collects that code plus a new password.
+// fpEmail is remembered between the two steps (and for "Resend code")
+// without needing to touch the main app state.
+let fpEmail = '';
+function forgotPasswordModal(step){
+  if(step==='verify'){
+    return `<div class="glass modal">
+      <h3 style="font-size:18px; margin-bottom:4px;">Enter your code</h3>
+      <p class="muted" style="font-size:13px; margin-bottom:18px;">We sent a 6-digit code to <strong>${fpEmail}</strong>. Enter it below along with your new password.</p>
+      <div class="field"><label class="field-label">6-digit code</label><input class="input" id="fpCode" placeholder="123456" inputmode="numeric" maxlength="6"/></div>
+      <div class="field"><label class="field-label">New password</label><input class="input" id="fpNewPassword" placeholder="••••••••" type="password"/></div>
+      <div class="field"><label class="field-label">Confirm new password</label><input class="input" id="fpConfirmPassword" placeholder="••••••••" type="password"/></div>
+      <button class="btn btn-primary btn-block" style="margin-top:6px;" data-action="forgot-password-confirm">Reset password</button>
+      <p class="muted" style="text-align:center; font-size:12.5px; margin-top:14px;">
+        Didn't get a code? <a style="color:var(--primary); font-weight:600; cursor:pointer;" data-action="forgot-password-resend">Resend</a>
+        &nbsp;·&nbsp;
+        <a style="color:var(--primary); font-weight:600; cursor:pointer;" data-action="forgot-password-back">Use a different email</a>
+      </p>
+    </div>`;
+  }
+  return `<div class="glass modal">
+    <h3 style="font-size:18px; margin-bottom:4px;">Reset your password</h3>
+    <p class="muted" style="font-size:13px; margin-bottom:18px;">Enter the email on your account and we'll send you a 6-digit code to reset your password.</p>
+    <div class="field"><label class="field-label">Email</label><input class="input" id="fpEmail" placeholder="you@example.com" type="email" value="${fpEmail}"/></div>
+    <div style="display:flex; gap:10px; margin-top:6px;">
+      <button class="btn btn-ghost btn-block" data-action="close-modal">Cancel</button>
+      <button class="btn btn-primary btn-block" data-action="forgot-password-send">Send code</button>
+    </div>
+  </div>`;
+}
+
 /* =========================================================
    RENDER + EVENTS
 ========================================================= */
@@ -1725,6 +1799,29 @@ document.addEventListener('click', (e)=>{
     case 'login-admin':
       setBtnLoading(el, true);
       signInAdmin(document.getElementById('adUsername').value, document.getElementById('adPassword').value).finally(()=>setBtnLoading(el, false));
+      break;
+    case 'forgot-password':
+      fpEmail = '';
+      openModal(forgotPasswordModal('request'));
+      break;
+    case 'forgot-password-send':
+      setBtnLoading(el, true);
+      requestPasswordReset(document.getElementById('fpEmail').value.trim()).finally(()=>setBtnLoading(el, false));
+      break;
+    case 'forgot-password-resend':
+      setBtnLoading(el, true);
+      requestPasswordReset(fpEmail).finally(()=>setBtnLoading(el, false));
+      break;
+    case 'forgot-password-back':
+      openModal(forgotPasswordModal('request'));
+      break;
+    case 'forgot-password-confirm':
+      setBtnLoading(el, true);
+      confirmPasswordReset(
+        document.getElementById('fpCode').value.trim(),
+        document.getElementById('fpNewPassword').value,
+        document.getElementById('fpConfirmPassword').value
+      ).finally(()=>setBtnLoading(el, false));
       break;
     case 'admin-tab':
       state.adminTab = el.dataset.tab;
@@ -2066,6 +2163,22 @@ document.addEventListener('keydown', (e)=>{
     const btn = document.querySelector('[data-action="login-admin"]');
     setBtnLoading(btn, true);
     signInAdmin(document.getElementById('adUsername').value, document.getElementById('adPassword').value).finally(()=>setBtnLoading(btn, false));
+  }
+  if(id==='fpEmail'){
+    e.preventDefault();
+    const btn = document.querySelector('[data-action="forgot-password-send"]');
+    setBtnLoading(btn, true);
+    requestPasswordReset(document.getElementById('fpEmail').value.trim()).finally(()=>setBtnLoading(btn, false));
+  }
+  if(id==='fpCode' || id==='fpNewPassword' || id==='fpConfirmPassword'){
+    e.preventDefault();
+    const btn = document.querySelector('[data-action="forgot-password-confirm"]');
+    setBtnLoading(btn, true);
+    confirmPasswordReset(
+      document.getElementById('fpCode').value.trim(),
+      document.getElementById('fpNewPassword').value,
+      document.getElementById('fpConfirmPassword').value
+    ).finally(()=>setBtnLoading(btn, false));
   }
 });
 
