@@ -521,11 +521,93 @@ function isConfigured(){ return !!sb; }
 async function refreshProfile(){
   if(!state.session){ state.profile = null; return; }
   const { data, error } = await sb.from('profiles').select('*').eq('id', state.session.user.id).single();
-  if(error){ console.error(error); state.profile = null; return; }
-  state.profile = data;
+  if(!error){ state.profile = data; return; }
+  if(error.code !== 'PGRST116'){ console.error(error); state.profile = null; return; }
+  // PGRST116 = no matching row. Email/password sign-up always creates its
+  // own profiles row right after auth.signUp() (see signUpStudent/
+  // signUpTeacher below); a Google sign-in skips straight to a Supabase
+  // session with no such row yet the very first time, so we create it here
+  // instead, once.
+  state.profile = await ensureOAuthProfile();
+}
+
+// Creates the profiles row (and, for a teacher, the teacher_profiles row)
+// for someone signing in with Google for the first time. The role they
+// intended — student or teacher — was stashed in localStorage right before
+// the redirect to Google, since Google itself has no notion of it.
+async function ensureOAuthProfile(){
+  if(oauthProfileCreation) return oauthProfileCreation;
+  oauthProfileCreation = (async()=>{
+    const user = state.session.user;
+    let role = 'student';
+    try{ role = localStorage.getItem('npt-oauth-role') || 'student'; localStorage.removeItem('npt-oauth-role'); }catch(e){}
+    const full_name = user.user_metadata?.full_name || user.user_metadata?.name || (user.email||'').split('@')[0] || 'there';
+    const { data, error } = await sb.from('profiles').insert({ id:user.id, role, full_name }).select().single();
+    if(error){
+      // Most likely: the other boot() code path already created this a
+      // moment earlier — just read what it made instead of failing.
+      const { data:existing } = await sb.from('profiles').select('*').eq('id', user.id).single();
+      return existing || null;
+    }
+    let freshTeacherProfile = null;
+    if(role === 'teacher'){
+      freshTeacherProfile = {
+        profile_id:user.id, initials: full_name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase(),
+        color: AVATAR_COLORS[Math.floor(Math.random()*AVATAR_COLORS.length)], category:'academics',
+        subjects:[], location:'', lat:null, lng:null, fee_start:0, fee_unit:'/month', experience:'', bio:'',
+      };
+      await sb.from('teacher_profiles').insert(freshTeacherProfile);
+    }
+    newlyCreatedOAuthSignup = { role, freshTeacherProfile };
+    return data;
+  })();
+  try{ return await oauthProfileCreation; } finally { oauthProfileCreation = null; }
+}
+
+// Called from boot() right after any refreshProfile() — if that just
+// created a brand-new Google sign-up's profile, route them exactly like
+// signUpStudent/signUpTeacher do (fresh teachers → onboarding, not an
+// empty dashboard) and return true so boot() skips its normal render().
+function handleFreshOAuthSignup(){
+  if(!newlyCreatedOAuthSignup) return false;
+  const { role, freshTeacherProfile } = newlyCreatedOAuthSignup;
+  newlyCreatedOAuthSignup = null;
+  if(role === 'teacher'){
+    state.selectedTeacherProfile = { ...freshTeacherProfile, schedule_slots: [] };
+    teacherDataStatus = 'idle';
+    toast('🎉 Teacher account created — let\'s fill in your profile.', 'ok');
+    goPostAuth('teacherOnboarding');
+  }else{
+    studentDataStatus = 'idle';
+    toast('🎉 Account created!', 'ok');
+    goPostAuth('studentDashboard');
+  }
+  return true;
+}
+
+// Kicks off "Continue with Google". Stashes the intended role so
+// ensureOAuthProfile() can use it once Google redirects back with a
+// session — Google's OAuth screen has no concept of "student vs teacher".
+async function signInWithGoogle(role){
+  try{ localStorage.setItem('npt-oauth-role', role); }catch(e){}
+  const { error } = await sb.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: location.origin + location.pathname },
+  });
+  if(error) toast('❌ ' + error.message, 'err');
 }
 
 let lastAuthUserId = null;
+// Set by refreshProfile() the moment it creates a brand-new profiles row
+// for a first-time "Continue with Google" sign-in (see ensureOAuthProfile()
+// below), so boot() knows to route them to onboarding/dashboard just like
+// signUpStudent/signUpTeacher do for email/password sign-ups. Cleared as
+// soon as boot() consumes it via handleFreshOAuthSignup().
+let newlyCreatedOAuthSignup = null;
+// De-dupes profile creation if refreshProfile() happens to be called twice
+// in quick succession for the same brand-new user (boot() calls it once
+// directly and once via the auth-state-change listener).
+let oauthProfileCreation = null;
 // Supabase fires SIGNED_IN on onAuthStateChange as soon as signUp()/
 // signInWithPassword() resolves internally — which lands *before* our own
 // signUpStudent/signInStudent/etc functions below finish their own
@@ -552,6 +634,7 @@ async function boot(){
       studentDataStatus = 'idle'; teacherDataStatus = 'idle'; adminDataStatus = 'idle';
       lastAuthUserId = newUserId;
     }
+    if(handleFreshOAuthSignup()) return;
     if(authFlowInProgress) return;
     render();
   });
@@ -560,6 +643,7 @@ async function boot(){
   state.session = session;
   lastAuthUserId = session?.user?.id || null;
   await refreshProfile();
+  if(handleFreshOAuthSignup()) return; // already navigated + rendered
 
   // support ?teacher=<id> deep links (e.g. shared from a teacher's dashboard)
   const params = new URLSearchParams(location.search);
@@ -1215,6 +1299,29 @@ function reviewsSectionBody(){
 /* =========================================================
    CUSTOMER PORTAL — AUTH
 ========================================================= */
+// A "Continue with Google" button + "or" divider, shared by the student
+// and teacher auth screens. `action` tells the click handler which portal
+// (and therefore which role) a brand-new Google sign-in should become —
+// see signInWithGoogle() below.
+function googleAuthButton(action){
+  return `
+  <button type="button" class="btn btn-block" data-action="${action}"
+    style="background:#fff; color:#3c4043; border:1px solid var(--divider); display:flex; align-items:center; justify-content:center; gap:10px; margin-bottom:18px; font-weight:600;">
+    <svg width="18" height="18" viewBox="0 0 48 48" style="flex-shrink:0;">
+      <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12s5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24s8.955,20,20,20s20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
+      <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
+      <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
+      <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
+    </svg>
+    Continue with Google
+  </button>
+  <div style="display:flex; align-items:center; gap:12px; margin:0 0 18px;">
+    <div style="flex:1; height:1px; background:var(--divider);"></div>
+    <span class="muted" style="font-size:12px;">or</span>
+    <div style="flex:1; height:1px; background:var(--divider);"></div>
+  </div>`;
+}
+
 function viewStudentAuth(){
   if(state.session && state.profile?.role==='student') return viewStudentDashboard();
   const mode = state.studentAuthMode;
@@ -1224,6 +1331,7 @@ function viewStudentAuth(){
     <div class="glass fade-in" style="padding:36px; width:100%; max-width:420px;">
       <div class="eyebrow">Parent / Student portal</div>
       <h2 style="font-size:24px; margin:8px 0 22px;">${mode==='login' ? 'Welcome back' : 'Create your account'}</h2>
+      ${googleAuthButton('google-signin-student')}
       ${mode==='signup' ? `<div class="field"><label class="field-label">Your name</label><input class="input" id="suName" placeholder="Parent's name"/></div>` : ''}
       <div class="field"><label class="field-label">Email</label><input class="input" id="suEmail" placeholder="you@example.com" type="email"/></div>
       <div class="field"><label class="field-label">Password</label><input class="input" id="suPassword" placeholder="••••••••" type="password"/></div>
@@ -1362,6 +1470,7 @@ function viewTeacherAuth(){
     <div class="glass fade-in" style="padding:36px; width:100%; max-width:420px;">
       <div class="eyebrow">Teacher portal</div>
       <h2 style="font-size:24px; margin:8px 0 22px;">${mode==='login' ? 'Welcome back' : 'Register as a teacher'}</h2>
+      ${googleAuthButton('google-signin-teacher')}
       ${mode==='signup' ? `<div class="field"><label class="field-label">Your name</label><input class="input" id="tuName" placeholder="Full name"/></div>` : ''}
       <div class="field"><label class="field-label">Email</label><input class="input" id="tuEmail" placeholder="you@example.com" type="email"/></div>
       <div class="field"><label class="field-label">Password</label><input class="input" id="tuPassword" placeholder="••••••••" type="password"/></div>
@@ -1590,7 +1699,10 @@ function viewAdminDashboard(){
         <div class="eyebrow">Admin panel</div>
         <h1 style="font-size:26px; margin-top:4px;">All profiles</h1>
       </div>
-      <button class="btn btn-ghost btn-sm" data-action="logout">🚪 Log out</button>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-ghost btn-sm" data-action="admin-change-password">🔑 Change password</button>
+        <button class="btn btn-ghost btn-sm" data-action="logout">🚪 Log out</button>
+      </div>
     </div>
     <div style="display:flex; gap:10px; margin-bottom:18px;">
       <div class="pill ${state.adminTab==='teachers'?'active':''}" data-action="admin-tab" data-tab="teachers">🍎 Teachers (${ADMIN_TEACHERS.length})</div>
@@ -1699,6 +1811,40 @@ function payModal(){
 // fpEmail is remembered between the two steps (and for "Resend code")
 // without needing to touch the main app state.
 let fpEmail = '';
+// Lets the already-logged-in admin change their own password from the
+// admin panel, without needing README "Part 7" or a Supabase dashboard
+// visit. Asks for the current password first (re-checked against Supabase
+// via signInWithPassword) so someone who walks up to an already-open
+// browser tab can't silently take over the account.
+function adminChangePasswordModal(){
+  return `<div class="glass modal">
+    <h3 style="font-size:18px; margin-bottom:4px;">Change admin password</h3>
+    <p class="muted" style="font-size:13px; margin-bottom:18px;">This updates the real password Supabase checks for the admin account.</p>
+    <div class="field"><label class="field-label">Current password</label><input class="input" id="acpCurrent" type="password" placeholder="••••••••"/></div>
+    <div class="field"><label class="field-label">New password</label><input class="input" id="acpNew" type="password" placeholder="••••••••"/></div>
+    <div class="field"><label class="field-label">Confirm new password</label><input class="input" id="acpConfirm" type="password" placeholder="••••••••"/></div>
+    <div style="display:flex; gap:10px; margin-top:6px;">
+      <button class="btn btn-ghost btn-block" data-action="close-modal">Cancel</button>
+      <button class="btn btn-primary btn-block" data-action="admin-change-password-confirm">Update password</button>
+    </div>
+  </div>`;
+}
+
+async function changeAdminPassword(currentPassword, newPassword, confirmPassword){
+  if(!currentPassword || !newPassword || !confirmPassword) return toast('Please fill in all fields', 'warn');
+  if(newPassword.length < 6) return toast('Password must be at least 6 characters', 'warn');
+  if(newPassword !== confirmPassword) return toast("New passwords don't match", 'warn');
+  // Re-verify the current password before changing anything — this call
+  // itself doesn't disturb the existing admin session on success (Supabase
+  // just re-confirms the same account), and fails cleanly if it's wrong.
+  const { error: verifyError } = await sb.auth.signInWithPassword({ email: ADMIN_EMAIL, password: currentPassword });
+  if(verifyError) return toast('❌ Current password is incorrect', 'err');
+  const { error: updateError } = await sb.auth.updateUser({ password: newPassword });
+  if(updateError) return toast('❌ ' + updateError.message, 'err');
+  closeModal();
+  toast('✅ Admin password updated', 'ok');
+}
+
 function forgotPasswordModal(step){
   if(step==='verify'){
     return `<div class="glass modal">
@@ -1823,6 +1969,17 @@ document.addEventListener('click', (e)=>{
         document.getElementById('fpConfirmPassword').value
       ).finally(()=>setBtnLoading(el, false));
       break;
+    case 'admin-change-password':
+      openModal(adminChangePasswordModal());
+      break;
+    case 'admin-change-password-confirm':
+      setBtnLoading(el, true);
+      changeAdminPassword(
+        document.getElementById('acpCurrent').value,
+        document.getElementById('acpNew').value,
+        document.getElementById('acpConfirm').value
+      ).finally(()=>setBtnLoading(el, false));
+      break;
     case 'admin-tab':
       state.adminTab = el.dataset.tab;
       render();
@@ -1926,6 +2083,16 @@ document.addEventListener('click', (e)=>{
       state.studentAuthMode = el.dataset.mode; render(); break;
     case 'teacher-auth-mode':
       state.teacherAuthMode = el.dataset.mode; render(); break;
+    case 'google-signin-student':
+      setBtnLoading(el, true);
+      captureAuthRedirect();
+      signInWithGoogle('student').finally(()=>setBtnLoading(el, false));
+      break;
+    case 'google-signin-teacher':
+      setBtnLoading(el, true);
+      captureAuthRedirect();
+      signInWithGoogle('teacher').finally(()=>setBtnLoading(el, false));
+      break;
     case 'login-student':
       setBtnLoading(el, true);
       signInStudent(document.getElementById('suEmail').value, document.getElementById('suPassword').value).finally(()=>setBtnLoading(el, false));
