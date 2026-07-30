@@ -203,3 +203,27 @@ for each row execute function update_teacher_rating();
 --
 -- drop policy if exists "admins can delete any profile" on profiles;
 -- create policy "admins can delete any profile" on profiles for delete using (is_admin());
+
+-- ---------------------------------------------------------------
+-- email_exists: lets the "Forgot password" screen tell someone whether
+-- an email is registered *before* trying to send a reset code, so it can
+-- show "no account found — sign up" instead of silently sending nothing.
+--
+-- NOTE ON TRADE-OFF: Supabase's own auth methods deliberately don't
+-- reveal whether an email is registered (this prevents "user
+-- enumeration" — someone scripting a list of emails against your app to
+-- find out who has an account). This function intentionally gives that
+-- protection up in exchange for a clearer "forgot password" experience.
+-- It only ever returns true/false, never any of the account's actual
+-- data, which limits — but doesn't eliminate — that exposure.
+--
+-- security definer: runs as the function's owner rather than the
+-- calling user, which is what lets it read auth.users — a table the
+-- anon/authenticated keys can never query directly on their own.
+-- Safe to re-run.
+-- ---------------------------------------------------------------
+create or replace function email_exists(check_email text) returns boolean as $$
+  select exists(select 1 from auth.users where lower(email) = lower(check_email));
+$$ language sql security definer stable;
+
+grant execute on function email_exists(text) to anon, authenticated;

@@ -816,17 +816,25 @@ async function logout(){
   nav(state.portal==='customer' ? 'home' : 'teacherHome');
 }
 
-// Step 1 of forgot-password: ask Supabase to email a 6-digit code to this
-// address. Supabase doesn't reveal whether the email exists (same
-// response either way), so the toast is worded generically. This only
-// works once the email template has been switched to show {{ .Token }} —
-// see README "Part 9".
+// Step 1 of forgot-password: first check (via the email_exists() SQL
+// function — see schema.sql) whether this address is even registered. If
+// not, tell the person plainly and offer a sign-up link instead of
+// silently sending nothing. Only if it IS registered do we ask Supabase
+// to email a 6-digit code. This only works once the email template has
+// been switched to show {{ .Token }} — see README "Part 9".
+//
+// NOTE: this deliberately gives up Supabase's default "don't reveal
+// whether an email exists" protection (see the comment on email_exists()
+// in schema.sql) in exchange for a clearer error message here.
 async function requestPasswordReset(email){
   if(!email) return toast('Please enter your email', 'warn');
+  const { data: exists, error: checkError } = await sb.rpc('email_exists', { check_email: email });
+  if(checkError) return toast('❌ ' + checkError.message, 'err');
+  fpEmail = email;
+  if(!exists){ openModal(forgotPasswordModal('not-found')); return; }
   const { error } = await sb.auth.resetPasswordForEmail(email);
   if(error) return toast('❌ ' + error.message, 'err');
-  fpEmail = email;
-  toast('📧 If that email has an account, a code is on its way', 'ok');
+  toast('📧 A code is on its way', 'ok');
   openModal(forgotPasswordModal('verify'));
 }
 
@@ -1840,6 +1848,16 @@ async function changeAdminPassword(currentPassword, newPassword, confirmPassword
 }
 
 function forgotPasswordModal(step){
+  if(step==='not-found'){
+    return `<div class="glass modal">
+      <h3 style="font-size:18px; margin-bottom:4px;">No account found</h3>
+      <p class="muted" style="font-size:13px; margin-bottom:18px;">There's no account registered with <strong>${fpEmail}</strong>.</p>
+      <button class="btn btn-primary btn-block" data-action="forgot-password-signup">Create an account</button>
+      <p class="muted" style="text-align:center; font-size:12.5px; margin-top:14px;">
+        <a style="color:var(--primary); font-weight:600; cursor:pointer;" data-action="forgot-password-back">Try a different email</a>
+      </p>
+    </div>`;
+  }
   if(step==='verify'){
     return `<div class="glass modal">
       <h3 style="font-size:18px; margin-bottom:4px;">Enter your code</h3>
@@ -1852,6 +1870,7 @@ function forgotPasswordModal(step){
         Didn't get a code? <a style="color:var(--primary); font-weight:600; cursor:pointer;" data-action="forgot-password-resend">Resend</a>
         &nbsp;·&nbsp;
         <a style="color:var(--primary); font-weight:600; cursor:pointer;" data-action="forgot-password-back">Use a different email</a>
+        <br/>Still nothing? Double check the email is right, or <a style="color:var(--primary); font-weight:600; cursor:pointer;" data-action="forgot-password-signup">try registering</a> — it may not have an account after all.
       </p>
     </div>`;
   }
@@ -1958,6 +1977,11 @@ document.addEventListener('click', (e)=>{
       break;
     case 'forgot-password-back':
       openModal(forgotPasswordModal('request'));
+      break;
+    case 'forgot-password-signup':
+      closeModal();
+      if(state.portal==='teacher'){ state.teacherAuthMode = 'signup'; nav('teacherAuth'); }
+      else{ state.studentAuthMode = 'signup'; nav('studentAuth'); }
       break;
     case 'forgot-password-confirm':
       setBtnLoading(el, true);
