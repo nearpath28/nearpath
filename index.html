@@ -2347,6 +2347,16 @@ document.addEventListener('keydown', (e)=>{
       document.getElementById('fpConfirmPassword').value
     ).finally(()=>setBtnLoading(btn, false));
   }
+  if(id==='acpCurrent' || id==='acpNew' || id==='acpConfirm'){
+    e.preventDefault();
+    const btn = document.querySelector('[data-action="admin-change-password-confirm"]');
+    setBtnLoading(btn, true);
+    changeAdminPassword(
+      document.getElementById('acpCurrent').value,
+      document.getElementById('acpNew').value,
+      document.getElementById('acpConfirm').value
+    ).finally(()=>setBtnLoading(btn, false));
+  }
 });
 
 boot();
